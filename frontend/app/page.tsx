@@ -1,103 +1,89 @@
-import Image from "next/image";
+"use client";
+import { useEffect, useState } from "react";
+import type { Persona, AnalysisResponse } from "@/lib/types";
+import { fetchPersonas, analyzePersona } from "@/lib/api";
+import PersonaSelector from "./components/PersonaSelector";
+import HealthCard from "./components/HealthCard";
+import StressPanel from "./components/StressPanel";
+import GroundingTrace from "./components/GroundingTrace";
+import WeightRationale from "./components/WeightRationale";
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  useEffect(() => {
+    fetchPersonas()
+      .then(setPersonas)
+      .catch(() =>
+        setError("Could not load personas — is the backend running?"),
+      );
+  }, []);
+
+  const handleSelect = async (id: string) => {
+    setSelectedId(id);
+    setResult(null);
+    setError(null);
+    setLoading(true);
+    try {
+      const data = await analyzePersona(id);
+      setResult(data);
+    } catch (e) {
+      setError(
+        `Analysis failed: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <main className="min-h-screen bg-slate-50">
+      <header className="border-b border-slate-200 bg-white px-6 py-4">
+        <h1 className="text-xl font-bold text-slate-900">
+          MSME Financial Health Card
+        </h1>
+        <p className="text-xs text-slate-400">
+          Stress-tested credit scoring · IDBI Innovate Track 03
+        </p>
+      </header>
+
+      <div className="mx-auto max-w-6xl px-4 py-6">
+        {error && (
+          <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_1fr]">
+          <div className="space-y-4">
+            <PersonaSelector
+              personas={personas}
+              selected={selectedId}
+              onSelect={handleSelect}
+              loading={loading}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+            {result && <WeightRationale data={result} />}
+          </div>
+
+          {loading && (
+            <div className="flex items-center justify-center py-24 text-slate-400">
+              <span className="animate-pulse text-sm">Running pipeline...</span>
+            </div>
+          )}
+
+          {result && !loading && (
+            <div className="space-y-6">
+              <HealthCard data={result} />
+              <StressPanel data={result} />
+              <GroundingTrace data={result} />
+            </div>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org â†’
-        </a>
-      </footer>
-    </div>
+      </div>
+    </main>
   );
 }
