@@ -1,4 +1,4 @@
-"use client";
+ï»¿"use client";
 import { useEffect, useState } from "react";
 import type { Persona, AnalysisResponse } from "@/lib/types";
 import { fetchPersonas, analyzePersona } from "@/lib/api";
@@ -19,7 +19,7 @@ export default function Home() {
     fetchPersonas()
       .then(setPersonas)
       .catch(() =>
-        setError("Could not load personas — is the backend running?"),
+        setError("Could not load personas - is the backend running?"),
       );
   }, []);
 
@@ -47,7 +47,7 @@ export default function Home() {
           MSME Financial Health Card
         </h1>
         <p className="text-xs text-slate-400">
-          Stress-tested credit scoring · IDBI Innovate Track 03
+          Stress-tested credit scoring - IDBI Innovate Track 03
         </p>
       </header>
 
