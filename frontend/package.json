@@ -12,7 +12,8 @@
   "dependencies": {
     "next": "15.5.20",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "recharts": "^3.9.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -23,6 +24,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/recharts": "^2.0.1",
     "eslint": "^9",
     "eslint-config-next": "15.5.20",
     "jest": "^30.4.2",
