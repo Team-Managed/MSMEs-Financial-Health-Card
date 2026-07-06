@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+.env
+
+# uv
+uv.lock
+
+# RAG
+backend/app/rag/chroma_store/
+
+# Node
+node_modules/
+.next/
+.pnpm-store/
+
+# Editor
+.vscode/
+.idea/
+*.swp
