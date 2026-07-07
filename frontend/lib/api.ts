@@ -8,14 +8,20 @@ export async function fetchPersonas(): Promise<Persona[]> {
   return res.json();
 }
 
-export async function analyzePersona(id: string): Promise<AnalysisResponse> {
-  const res = await fetch(
-    `${BASE_URL}/api/msme/${encodeURIComponent(id)}/analyze`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    },
-  );
-  if (!res.ok) throw new Error(`analyzePersona failed: ${res.status}`);
+export async function analyzeCustom(
+  sector: string,
+  yearsOperating: number,
+  profileType: string,
+): Promise<AnalysisResponse> {
+  const res = await fetch(`${BASE_URL}/api/analyze`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sector,
+      years_operating: yearsOperating,
+      profile_type: profileType,
+    }),
+  });
+  if (!res.ok) throw new Error(`analyzeCustom failed: ${res.status}`);
   return res.json();
 }

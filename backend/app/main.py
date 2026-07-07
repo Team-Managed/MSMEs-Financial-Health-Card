@@ -1,13 +1,17 @@
 from __future__ import annotations
 import logging
+from dotenv import load_dotenv
+load_dotenv()  # load backend/.env (or project-root .env) before any other import reads env vars
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.data.personas import PERSONAS
-from backend.app.graph.pipeline import run_pipeline
+from backend.app.data.mock_generators import generate_profile
+from backend.app.graph.pipeline import run_pipeline, run_pipeline_with_profile
 from backend.app.rag.retriever import Retriever
 from backend.app.schemas.models import (
-    AnalysisResponse, WeightVector, WeightRationaleItem,
+    AnalysisResponse, CustomAnalyzeRequest, WeightVector, WeightRationaleItem,
     CFCRResult, StressResult, GroundingCheck
 )
 
@@ -38,20 +42,9 @@ def get_personas():
     ]
 
 
-@app.post("/api/msme/{persona_id}/analyze", response_model=AnalysisResponse)
-def analyze(persona_id: str):
-    if persona_id not in PERSONAS:
-        raise HTTPException(status_code=404, detail=f"Persona '{persona_id}' not found")
-
-    try:
-        state = run_pipeline(persona_id, retriever=_retriever)
-    except Exception as exc:
-        logger.exception("Pipeline failed for persona %s", persona_id)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
+def _build_response(state: dict) -> AnalysisResponse:
     risk = state["risk_output"]
     profile = state["profile"]
-
     return AnalysisResponse(
         profile_summary={
             "msme_id": profile.msme_id,
@@ -68,3 +61,33 @@ def analyze(persona_id: str):
         narrative=state.get("narrative", ""),
         grounding_trace=state.get("grounding_trace", []),
     )
+
+
+@app.post("/api/msme/{persona_id}/analyze", response_model=AnalysisResponse)
+def analyze(persona_id: str):
+    if persona_id not in PERSONAS:
+        raise HTTPException(status_code=404, detail=f"Persona '{persona_id}' not found")
+    try:
+        state = run_pipeline(persona_id, retriever=_retriever)
+    except Exception as exc:
+        logger.exception("Pipeline failed for persona %s", persona_id)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _build_response(state)
+
+
+@app.post("/api/analyze", response_model=AnalysisResponse)
+def analyze_custom(req: CustomAnalyzeRequest):
+    """Run the full pipeline for a user-provided profile instead of a hardcoded persona."""
+    import random
+    profile = generate_profile(
+        seed=random.randint(1, 999_999),
+        sector=req.sector,
+        profile_type=req.profile_type,
+        years_operating=req.years_operating,
+    )
+    try:
+        state = run_pipeline_with_profile(profile, retriever=_retriever)
+    except Exception as exc:
+        logger.exception("Pipeline failed for custom profile (sector=%s type=%s)", req.sector, req.profile_type)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return _build_response(state)

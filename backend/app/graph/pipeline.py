@@ -17,6 +17,7 @@ from backend.app.graph.nodes import (
     node_grounding_validator,
 )
 from backend.app.rag.retriever import Retriever
+from backend.app.schemas.models import MSMEProfile
 
 
 def _build_graph() -> StateGraph:
@@ -62,9 +63,23 @@ def run_pipeline(persona_id: str, retriever: Retriever | None = None) -> dict:
     }
     graph = _get_graph()
     final_state = graph.invoke(initial_state)
-    # Merge risk_output fields into the top-level dict so callers can access
-    # cfcr_baseline, baseline_score, etc. directly, while keeping risk_output
-    # nested for main.py's state["risk_output"] access.
+    result = dict(final_state)
+    if "risk_output" in result:
+        result = {**result["risk_output"], **result}
+    return result
+
+
+def run_pipeline_with_profile(profile: MSMEProfile, retriever: Retriever | None = None) -> dict:
+    """Run the pipeline with a pre-built profile, bypassing node_aggregator's persona lookup."""
+    if retriever is None:
+        retriever = Retriever()
+
+    initial_state = {
+        "profile": profile,
+        "retriever": retriever,
+    }
+    graph = _get_graph()
+    final_state = graph.invoke(initial_state)
     result = dict(final_state)
     if "risk_output" in result:
         result = {**result["risk_output"], **result}

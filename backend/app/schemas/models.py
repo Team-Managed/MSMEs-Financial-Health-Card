@@ -81,6 +81,12 @@ class GroundingCheck(BaseModel):
     status: Literal["pass", "fail"]
 
 
+class CustomAnalyzeRequest(BaseModel):
+    sector: str
+    years_operating: int
+    profile_type: Literal["healthy", "ntc", "buyer_concentrated", "seasonal"]
+
+
 class AnalysisResponse(BaseModel):
     profile_summary: dict
     cfcr_baseline: float

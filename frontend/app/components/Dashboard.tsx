@@ -1,34 +1,30 @@
 "use client";
 import { useState } from "react";
 import dynamic from "next/dynamic";
-import type { Persona, AnalysisResponse } from "@/lib/types";
-import { analyzePersona } from "@/lib/api";
-import PersonaSelector from "./PersonaSelector";
+import type { AnalysisResponse } from "@/lib/types";
+import { analyzeCustom } from "@/lib/api";
+import ProfileForm from "./ProfileForm";
 import HealthCard from "./HealthCard";
-import GroundingTrace from "./GroundingTrace";
 import WeightRationale from "./WeightRationale";
 
 // Lazy-load recharts-heavy component — only needed after a user triggers analysis
 const StressPanel = dynamic(() => import("./StressPanel"), { ssr: false });
 
-interface Props {
-  initialPersonas: Persona[];
-  initialError: string | null;
-}
-
-export default function Dashboard({ initialPersonas, initialError }: Props) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export default function Dashboard() {
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(initialError);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSelect = async (id: string) => {
-    setSelectedId(id);
+  const handleSubmit = async (
+    sector: string,
+    yearsOperating: number,
+    profileType: string,
+  ) => {
     setResult(null);
     setError(null);
     setLoading(true);
     try {
-      const data = await analyzePersona(id);
+      const data = await analyzeCustom(sector, yearsOperating, profileType);
       setResult(data);
     } catch (e) {
       setError(
@@ -46,42 +42,51 @@ export default function Dashboard({ initialPersonas, initialError }: Props) {
           MSME Financial Health Card
         </h1>
         <p className="text-xs text-slate-400">
-          Stress-tested credit scoring - IDBI Innovate Track 03
+          Stress-tested credit scoring · IDBI Innovate Track 03
         </p>
       </header>
 
-      <div className="mx-auto max-w-6xl px-4 py-6">
+      <div className="mx-auto max-w-6xl px-4 py-8">
         {error !== null ? (
-          <div className="mb-4 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mb-6 rounded-md bg-red-50 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         ) : null}
 
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_1fr]">
-          <div className="space-y-4">
-            <PersonaSelector
-              personas={initialPersonas}
-              selected={selectedId}
-              onSelect={handleSelect}
-              loading={loading}
-            />
-            {result !== null ? <WeightRationale data={result} /> : null}
+        {/* Phase 1: no result yet — centered form */}
+        {result === null && !loading ? (
+          <div className="mx-auto max-w-lg rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+            <ProfileForm onSubmit={handleSubmit} loading={loading} />
           </div>
+        ) : null}
 
-          {loading ? (
-            <div className="flex items-center justify-center py-24 text-slate-400">
-              <span className="animate-pulse text-sm">Running pipeline...</span>
+        {/* Loading state */}
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-32 text-slate-400">
+            <span className="mb-2 animate-pulse text-sm">
+              Running pipeline…
+            </span>
+            <span className="text-xs text-slate-300">
+              RAG retrieval → weight-setting → stress scenarios → narrative
+            </span>
+          </div>
+        ) : null}
+
+        {/* Phase 2: result available — sidebar + results */}
+        {result !== null && !loading ? (
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_1fr]">
+            <div className="space-y-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                <ProfileForm onSubmit={handleSubmit} loading={loading} />
+              </div>
+              <WeightRationale data={result} />
             </div>
-          ) : null}
-
-          {result !== null && !loading ? (
             <div className="space-y-6">
               <HealthCard data={result} />
               <StressPanel data={result} />
-              <GroundingTrace data={result} />
             </div>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </div>
     </main>
   );

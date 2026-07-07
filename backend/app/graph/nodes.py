@@ -38,6 +38,9 @@ def _get_gemini_model() -> genai.GenerativeModel:
 # ── Node 1: Data Aggregator ───────────────────────────────────────────────────
 
 def node_aggregator(state: dict) -> dict:
+    # If a profile was injected directly (custom analysis), skip persona lookup
+    if state.get("profile") is not None:
+        return {}
     persona_id = state["persona_id"]
     profile = PERSONAS.get(persona_id)
     if profile is None:
