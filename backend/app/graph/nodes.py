@@ -10,6 +10,7 @@ import os
 import re
 
 import google.generativeai as genai
+from langsmith import traceable
 
 from backend.app.data.personas import PERSONAS
 from backend.app.graph.risk_engine import compute_risk
@@ -20,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_WEIGHTS = WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15)
 _DEFAULT_RATIONALE = [
-    WeightRationaleItem(dimension="gst", reasoning="Default equal weighting — no RAG context available.", cited_chunk_id="default"),
-    WeightRationaleItem(dimension="upi", reasoning="Default equal weighting — no RAG context available.", cited_chunk_id="default"),
-    WeightRationaleItem(dimension="aa", reasoning="Default equal weighting — no RAG context available.", cited_chunk_id="default"),
-    WeightRationaleItem(dimension="epfo", reasoning="Default equal weighting — no RAG context available.", cited_chunk_id="default"),
+    WeightRationaleItem(dimension="gst", reasoning="GST filing consistency and turnover trend weighted at 30% as the primary formal-economy signal for credit assessment.", cited_chunk_id="default"),
+    WeightRationaleItem(dimension="upi", reasoning="UPI cash-flow patterns weighted at 30% as a real-time proxy for business liquidity and revenue stability.", cited_chunk_id="default"),
+    WeightRationaleItem(dimension="aa", reasoning="Account Aggregator bank data weighted at 25% reflecting repayment behaviour and balance adequacy.", cited_chunk_id="default"),
+    WeightRationaleItem(dimension="epfo", reasoning="EPFO payroll consistency weighted at 15% as an indicator of workforce stability and operational continuity.", cited_chunk_id="default"),
 ]
 
 
@@ -50,6 +51,7 @@ def node_aggregator(state: dict) -> dict:
 
 # ── Node 1.5a: Sector Context Retriever ──────────────────────────────────────
 
+@traceable(name="sector-retriever", run_type="retriever")
 def node_sector_retriever(state: dict) -> dict:
     profile = state["profile"]
     retriever: Retriever = state.get("retriever") or Retriever()
@@ -91,6 +93,7 @@ Respond with ONLY valid JSON:
 }}"""
 
 
+@traceable(name="weight-setter", run_type="llm")
 def node_weight_setter(state: dict) -> dict:
     profile = state["profile"]
     chunks: list[dict] = state.get("retrieved_chunks", [])
@@ -175,6 +178,7 @@ Rules:
 """
 
 
+@traceable(name="explainer", run_type="llm")
 def node_explainer(state: dict) -> dict:
     profile = state["profile"]
     risk = state["risk_output"]
@@ -257,6 +261,7 @@ def _flatten_risk_numbers(risk_output: dict) -> set[float]:
     return numbers
 
 
+@traceable(name="grounding-validator")
 def node_grounding_validator(state: dict) -> dict:
     from backend.app.schemas.models import GroundingCheck
 

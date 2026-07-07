@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import type { AnalysisResponse } from "@/lib/types";
 import { analyzeCustom } from "@/lib/api";
 import ProfileForm from "./ProfileForm";
+import type { AnalysisParams } from "./ProfileForm";
 import HealthCard from "./HealthCard";
 import WeightRationale from "./WeightRationale";
 
@@ -15,16 +16,12 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (
-    sector: string,
-    yearsOperating: number,
-    profileType: string,
-  ) => {
+  const handleSubmit = async (params: AnalysisParams) => {
     setResult(null);
     setError(null);
     setLoading(true);
     try {
-      const data = await analyzeCustom(sector, yearsOperating, profileType);
+      const data = await analyzeCustom(params);
       setResult(data);
     } catch (e) {
       setError(

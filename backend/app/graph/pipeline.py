@@ -7,6 +7,7 @@ from __future__ import annotations
 import operator
 from typing import Annotated
 from langgraph.graph import StateGraph, END
+from langsmith import traceable
 from backend.app.graph.nodes import (
     node_aggregator,
     node_sector_retriever,
@@ -53,6 +54,7 @@ def _get_graph():
     return _COMPILED_GRAPH
 
 
+@traceable(name="msme-pipeline", project_name="msme-financial-health-card")
 def run_pipeline(persona_id: str, retriever: Retriever | None = None) -> dict:
     if retriever is None:
         retriever = Retriever()
@@ -69,6 +71,7 @@ def run_pipeline(persona_id: str, retriever: Retriever | None = None) -> dict:
     return result
 
 
+@traceable(name="msme-pipeline", project_name="msme-financial-health-card")
 def run_pipeline_with_profile(profile: MSMEProfile, retriever: Retriever | None = None) -> dict:
     """Run the pipeline with a pre-built profile, bypassing node_aggregator's persona lookup."""
     if retriever is None:

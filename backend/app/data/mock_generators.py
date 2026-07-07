@@ -16,8 +16,17 @@ def generate_profile(
     msme_id: str | None = None,
     business_name: str | None = None,
     years_operating: int = 5,
+    msme_tier: str = "micro",
+    employee_tier: str = "micro",
 ) -> MSMEProfile:
     rng = np.random.default_rng(seed)
+
+    # Scale all monetary values to reflect realistic INR amounts per MSME tier
+    # micro ~₹1–5 Cr/yr → base ×1 | small ~₹5–50 Cr/yr → ×15 | medium ~₹50–250 Cr/yr → ×80
+    TIER_SCALE = {"micro": 1, "small": 15, "medium": 80}
+    EMPLOYEE_BASE = {"micro": 6, "small": 25, "medium": 100}
+    scale = TIER_SCALE.get(msme_tier, 1)
+    emp_base = EMPLOYEE_BASE.get(employee_tier, 6)
 
     if profile_type == "healthy":
         base_turnover = 200_000.0
@@ -77,6 +86,15 @@ def generate_profile(
 
     else:
         raise ValueError(f"Unknown profile_type: {profile_type}")
+
+    # Apply MSME tier scale to all monetary values
+    base_turnover *= scale
+    inflow_base *= scale
+    avg_balance *= scale
+    emi_total *= scale
+
+    # Override employee base from employee_tier if provided
+    employee_base = emp_base
 
     # Build 12-month series with noise
     months = np.arange(12)

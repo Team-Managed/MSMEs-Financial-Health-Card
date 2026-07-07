@@ -1,7 +1,9 @@
 from __future__ import annotations
 import logging
+import os
+from pathlib import Path
 from dotenv import load_dotenv
-load_dotenv()  # load backend/.env (or project-root .env) before any other import reads env vars
+load_dotenv(Path(__file__).parent.parent / ".env")  # always resolves to backend/.env
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,7 +23,7 @@ app = FastAPI(title="MSME Financial Health Card API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://localhost:3001"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,7 +33,14 @@ _retriever = Retriever()   # singleton — loads Chroma on startup
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    import langsmith.utils as ls_utils
+    return {
+        "status": "ok",
+        "tracing_enabled": ls_utils.tracing_is_enabled(),
+        "LANGSMITH_TRACING": os.environ.get("LANGSMITH_TRACING"),
+        "LANGCHAIN_TRACING_V2": os.environ.get("LANGCHAIN_TRACING_V2"),
+        "LANGSMITH_API_KEY_set": bool(os.environ.get("LANGSMITH_API_KEY") or os.environ.get("LANGCHAIN_API_KEY")),
+    }
 
 
 @app.get("/api/personas")
@@ -84,6 +93,8 @@ def analyze_custom(req: CustomAnalyzeRequest):
         sector=req.sector,
         profile_type=req.profile_type,
         years_operating=req.years_operating,
+        msme_tier=req.msme_tier,
+        employee_tier=req.employee_tier,
     )
     try:
         state = run_pipeline_with_profile(profile, retriever=_retriever)

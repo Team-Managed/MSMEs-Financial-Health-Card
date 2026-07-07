@@ -85,6 +85,9 @@ class CustomAnalyzeRequest(BaseModel):
     sector: str
     years_operating: int
     profile_type: Literal["healthy", "ntc", "buyer_concentrated", "seasonal"]
+    msme_tier: Literal["micro", "small", "medium"] = "micro"
+    gst_registered: bool = True
+    employee_tier: Literal["micro", "small", "medium"] = "micro"
 
 
 class AnalysisResponse(BaseModel):
