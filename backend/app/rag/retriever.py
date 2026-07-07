@@ -4,6 +4,7 @@ Gracefully returns [] if the index does not exist.
 """
 from __future__ import annotations
 import logging
+from pathlib import Path
 import chromadb
 from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
 
@@ -11,10 +12,11 @@ logger = logging.getLogger(__name__)
 
 _COLLECTION_NAME = "rag_corpus"
 _EMBED_MODEL = "all-MiniLM-L6-v2"
+_DEFAULT_CHROMA_DIR = str(Path(__file__).parent / "chroma_store")
 
 
 class Retriever:
-    def __init__(self, chroma_dir: str = "backend/app/rag/chroma_store"):
+    def __init__(self, chroma_dir: str = _DEFAULT_CHROMA_DIR):
         self._ef = SentenceTransformerEmbeddingFunction(model_name=_EMBED_MODEL)
         try:
             self._client = chromadb.PersistentClient(path=chroma_dir)
