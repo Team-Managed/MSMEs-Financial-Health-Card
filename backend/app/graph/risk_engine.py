@@ -53,24 +53,52 @@ def _gst_score(gst) -> float:
 
 
 def _upi_score(upi) -> float:
-    """Score 0–100 from UPI data."""
-    net_flows = [i - o for i, o in zip(upi.monthly_inflow_series, upi.monthly_outflow_series)]
+    """Score 0–100 from UPI data.
+
+    Three components:
+    - Stability   (0-1): inverse of CV on net flows — rewards consistency.
+    - Margin      (0-1): mean net flow / mean inflow, normalised to 0–50% range.
+                         A uniform revenue cut or buyer loss shrinks net flow
+                         while outflows stay fixed, so margin falls.
+    - Concentration penalty: excess share above 40% subtracted directly.
+
+    Weights: 50% stability + 50% margin.
+    """
+    inflows = upi.monthly_inflow_series
+    outflows = upi.monthly_outflow_series
+    net_flows = [i - o for i, o in zip(inflows, outflows)]
     mean_net = float(np.mean(net_flows))
-    if mean_net <= 0:
-        return 0.0
+    mean_inflow = float(np.mean(inflows)) if inflows else 1.0
+
+    # Stability: penalise high CV; zero/negative mean → full instability
     cv = float(np.std(net_flows) / mean_net) if mean_net > 0 else 1.0
-    stability = min(max(1 - cv, 0), 1)
-    concentration_penalty = max(0, upi.top_counterparty_share - 0.4)  # penalise >40%
-    raw = stability - concentration_penalty
-    return round(max(0, raw) * 100, 2)
+    stability = min(max(1.0 - cv, 0.0), 1.0)
+
+    # Margin adequacy: 0–50% net/inflow ratio maps to 0–1
+    margin = mean_net / mean_inflow if mean_inflow > 0 else 0.0
+    margin_score = min(max(margin / 0.5, 0.0), 1.0)
+
+    concentration_penalty = max(0.0, upi.top_counterparty_share - 0.4)
+    raw = 0.5 * stability + 0.5 * margin_score - concentration_penalty
+    return round(max(0.0, raw) * 100, 2)
 
 
 def _aa_score(aa) -> float:
-    """Score 0–100 from AA bank data."""
+    """Score 0–100 from AA bank data.
+
+    Penalties:
+    - Bounce history  : 10 pp per bounce, capped at 50 pp.
+    - Overdraft use   : up to 30 pp (rate × 0.3).
+    - Debt-service    : DSR = EMI / operating_outflow; subtracted linearly,
+                         capped at 50 pp. A rate hike raises EMI → raises DSR
+                         → lowers score. Zero EMI (NTC) → zero penalty.
+    """
     bounce_penalty = min(aa.bounced_payment_count_12mo * 0.1, 0.5)
     overdraft_penalty = aa.overdraft_utilization_rate * 0.3
-    base = 1.0 - bounce_penalty - overdraft_penalty
-    return round(max(0, base) * 100, 2)
+    dsr = aa.existing_loan_emi_total / max(aa.estimated_monthly_operating_outflow, 1.0)
+    dsr_penalty = min(dsr, 0.5)
+    base = 1.0 - bounce_penalty - overdraft_penalty - dsr_penalty
+    return round(max(0.0, base) * 100, 2)
 
 
 def _epfo_score(epfo) -> float:
@@ -106,18 +134,29 @@ def _apply_stress(profile: MSMEProfile, scenario: str) -> tuple[MSMEProfile, str
     p = copy.deepcopy(profile)
 
     if scenario == "receivable_delay_60d":
-        # Delay inflows: reduce last 2 months of inflows by 40%, spike overdraft
-        p.upi.monthly_inflow_series[-1] *= 0.6
-        p.upi.monthly_inflow_series[-2] *= 0.6
+        # Haircut the two largest inflow months by 40% — these represent the
+        # large receivables delayed 60 days. Top-2 are always inside the top-3
+        # used by _near_term_receivables, so CFCR always falls regardless of
+        # which months are seasonally high.
+        inflows = list(p.upi.monthly_inflow_series)
+        top2_idx = sorted(range(len(inflows)), key=lambda i: inflows[i], reverse=True)[:2]
+        for idx in top2_idx:
+            inflows[idx] *= 0.6
+        p.upi.monthly_inflow_series = inflows
         p.aa_bank_data.overdraft_utilization_rate = min(
             p.aa_bank_data.overdraft_utilization_rate + 0.20, 1.0
         )
-        driver = "UPI inflows delayed 60d (−40% last 2 months); overdraft +20pp"
+        driver = "Top-2 UPI inflow months delayed 60d (−40%); overdraft +20pp"
 
     elif scenario == "revenue_drop_20pct":
+        # Perturb the series AND update yoy_growth_rate so _gst_score's trend
+        # term reflects the revenue shock.  If current YoY = g, a 20% fall in
+        # this year's revenue gives new_yoy = 0.8*(1+g) − 1.
+        g = p.gst.yoy_growth_rate
         p.gst.monthly_turnover_series = [v * 0.80 for v in p.gst.monthly_turnover_series]
+        p.gst.yoy_growth_rate = round(0.8 * (1.0 + g) - 1.0, 6)
         p.upi.monthly_inflow_series = [v * 0.80 for v in p.upi.monthly_inflow_series]
-        driver = "GST turnover and UPI inflows cut 20%"
+        driver = "GST turnover and UPI inflows cut 20%; effective YoY growth revised downward"
 
     elif scenario == "buyer_loss":
         share = p.upi.top_counterparty_share
