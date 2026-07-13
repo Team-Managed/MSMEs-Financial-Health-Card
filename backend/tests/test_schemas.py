@@ -33,6 +33,12 @@ def test_weight_vector_must_be_floats():
     wv = WeightVector(gst=0.3, upi=0.3, aa=0.25, epfo=0.15)
     assert abs(wv.gst + wv.upi + wv.aa + wv.epfo - 1.0) < 1e-6
 
+
+def test_weight_vector_rejects_weights_that_do_not_sum_to_one():
+    with pytest.raises(ValidationError, match="sum to 1.0"):
+        WeightVector(gst=0.5, upi=0.5, aa=0.5, epfo=0.5)
+
+
 def test_cfcr_pass_when_gte_one():
     r = CFCRResult(scenario="baseline", cfcr=1.25, pass_fail=True)
     assert r.pass_fail is True

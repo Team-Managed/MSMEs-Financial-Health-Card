@@ -1,4 +1,4 @@
-import { fetchPersonas, analyzePersona } from "./api";
+import { analyzeCustom, fetchPersonas, analyzePersona } from "./api";
 
 global.fetch = jest.fn();
 
@@ -42,6 +42,32 @@ describe("analyzePersona", () => {
     expect(mockFetch).toHaveBeenCalledWith(
       "http://localhost:8000/api/msme/healthy/analyze",
       expect.objectContaining({ method: "POST" }),
+    );
+  });
+});
+
+describe("analyzeCustom", () => {
+  it("includes GST registration in the custom analysis request", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ cfcr_baseline: 1.3 }),
+    });
+
+    await analyzeCustom({
+      sector: "services",
+      yearsOperating: 5,
+      profileType: "healthy",
+      msmeTier: "micro",
+      gstRegistered: false,
+      employeeTier: "micro",
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/analyze",
+      expect.objectContaining({
+        method: "POST",
+        body: expect.stringContaining('"gst_registered":false'),
+      }),
     );
   });
 });

@@ -11,6 +11,9 @@ uv.lock
 
 # RAG
 backend/app/rag/chroma_store/
+backend/.deepeval/
+backend/eval_results.txt
+eval_results.txt
 
 # Node
 node_modules/
@@ -21,3 +24,6 @@ node_modules/
 .vscode/
 .idea/
 *.swp
+
+# macOS
+.DS_Store

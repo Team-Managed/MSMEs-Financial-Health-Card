@@ -27,6 +27,7 @@ def generate_profile(
     bounced_payments_12mo: int | None = None,
     filing_consistency_score: float | None = None,
     yoy_growth_rate: float | None = None,
+    gst_registered: bool = True,
 ) -> MSMEProfile:
     rng = np.random.default_rng(seed)
 
@@ -144,7 +145,7 @@ def generate_profile(
         years_operating=years_operating,
         gst=GSTData(
             monthly_turnover_series=turnover,
-            filing_consistency_score=filing_score,
+            filing_consistency_score=(filing_score if gst_registered else min(filing_score, 0.35)),
             yoy_growth_rate=growth,
         ),
         upi=UPIData(

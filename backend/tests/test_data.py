@@ -19,6 +19,16 @@ def test_generate_profile_reproducible():
     assert p1.gst.monthly_turnover_series == p2.gst.monthly_turnover_series
 
 
+def test_unregistered_gst_reduces_gst_evidence_score():
+    registered = generate_profile(
+        seed=7, sector="services", profile_type="healthy", gst_registered=True,
+    )
+    unregistered = generate_profile(
+        seed=7, sector="services", profile_type="healthy", gst_registered=False,
+    )
+    assert unregistered.gst.filing_consistency_score < registered.gst.filing_consistency_score
+
+
 def test_personas_has_four_keys():
     assert set(PERSONAS.keys()) == {"healthy", "ntc", "buyer_concentrated", "seasonal"}
 
