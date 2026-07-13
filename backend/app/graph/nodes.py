@@ -216,6 +216,37 @@ def node_risk_engine(state: dict) -> dict:
     return {"risk_output": risk_output}
 
 
+# ── Node 3.5: Explainer Retriever ────────────────────────────────────────────
+
+@traceable(name="explainer-retriever", run_type="retriever")
+def node_explainer_retriever(state: dict) -> dict:
+    profile = state["profile"]
+    risk = state["risk_output"]
+    retriever: Retriever = state.get("retriever") or Retriever()
+
+    worst_score = sorted(risk["stress_results"], key=lambda s: s.delta)[:2]
+    worst_cfcr = sorted(
+        [item for item in risk["cfcr_by_scenario"] if item.scenario != "baseline"],
+        key=lambda s: s.cfcr,
+    )[:2]
+
+    ntc = "new to credit" if profile.aa_bank_data.existing_loan_count == 0 else "existing credit history"
+    buyer_flag = "buyer concentration flagged" if risk["buyer_concentration_flag"] else "buyer concentration not flagged"
+    worst_score_text = ", ".join(f"{item.scenario}({item.delta:+.1f})" for item in worst_score) or "none"
+    worst_cfcr_text = ", ".join(f"{item.scenario}({item.cfcr})" for item in worst_cfcr) or "none"
+
+    query = (
+        f"MSME {profile.sector} risk explainer guidance; "
+        f"{ntc}; {buyer_flag}; "
+        f"worst stress scenarios by score: {worst_score_text}; "
+        f"worst CFCR scenarios: {worst_cfcr_text}; "
+        f"material risk concepts for loan officer explanation"
+    )
+
+    chunks = retriever.query(query, n_results=5)
+    return {"explainer_chunks": chunks}
+
+
 # ── Node 4: Explainer (LLM + RAG) ────────────────────────────────────────────
 
 _EXPLAINER_PROMPT = """You are a financial analyst writing a credit health summary for a loan officer.
@@ -252,7 +283,7 @@ Rules:
 def node_explainer(state: dict) -> dict:
     profile = state["profile"]
     risk = state["risk_output"]
-    chunks: list[dict] = state.get("retrieved_chunks", [])
+    chunks: list[dict] = state.get("explainer_chunks", [])
 
     stress_table = "\n".join(
         f"  {r.scenario}: score {r.stressed_score}/100 (delta {r.delta:+.1f}), "
@@ -337,7 +368,7 @@ def node_grounding_validator(state: dict) -> dict:
 
     narrative: str = state.get("narrative", "")
     risk_output: dict = state["risk_output"]
-    retrieved_chunks: list[dict] = state.get("retrieved_chunks", [])
+    retrieved_chunks: list[dict] = state.get("explainer_chunks", [])
     valid_chunk_ids = {c["chunk_id"] for c in retrieved_chunks}
 
     grounding_trace: list[GroundingCheck] = []

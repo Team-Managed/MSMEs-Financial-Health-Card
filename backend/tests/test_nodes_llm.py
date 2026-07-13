@@ -14,7 +14,7 @@ def _make_state():
         "profile": profile,
         "weights": weights,
         "risk_output": risk_output,
-        "retrieved_chunks": [
+        "explainer_chunks": [
             {"chunk_id": "c001", "text": "RBI guidance on MSME credit risk.", "source": "rbi.pdf", "section": "s1"}
         ],
     }
@@ -39,7 +39,7 @@ def test_explainer_returns_narrative(mock_genai):
 def test_grounding_validator_catches_fabricated_number():
     state = _make_state()
     state["narrative"] = "The CFCR is 99.99 in the baseline scenario."
-    state["retrieved_chunks"] = []
+    state["explainer_chunks"] = []
     result = node_grounding_validator(state)
     assert "grounding_trace" in result
     checks = result["grounding_trace"]
@@ -52,7 +52,7 @@ def test_grounding_validator_passes_real_number():
     state = _make_state()
     cfcr = state["risk_output"]["cfcr_baseline"]
     state["narrative"] = f"The CFCR is {cfcr} under baseline conditions."
-    state["retrieved_chunks"] = []
+    state["explainer_chunks"] = []
     result = node_grounding_validator(state)
     checks = result["grounding_trace"]
     fails = [c for c in checks if c.status == "fail"]

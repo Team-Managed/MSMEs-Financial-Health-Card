@@ -1,7 +1,7 @@
 """
 LangGraph pipeline definition.
 Graph: aggregator → sector_retriever → weight_setter → stress_generator
-       → risk_engine → explainer → grounding_validator
+    → risk_engine → explainer_retriever → explainer → grounding_validator
 """
 from __future__ import annotations
 import operator
@@ -14,6 +14,7 @@ from backend.app.graph.nodes import (
     node_weight_setter,
     node_stress_generator,
     node_risk_engine,
+    node_explainer_retriever,
     node_explainer,
     node_grounding_validator,
 )
@@ -29,6 +30,7 @@ def _build_graph() -> StateGraph:
     graph.add_node("weight_setter", node_weight_setter)
     graph.add_node("stress_generator", node_stress_generator)
     graph.add_node("risk_engine", node_risk_engine)
+    graph.add_node("explainer_retriever", node_explainer_retriever)
     graph.add_node("explainer", node_explainer)
     graph.add_node("grounding_validator", node_grounding_validator)
 
@@ -37,7 +39,8 @@ def _build_graph() -> StateGraph:
     graph.add_edge("sector_retriever", "weight_setter")
     graph.add_edge("weight_setter", "stress_generator")
     graph.add_edge("stress_generator", "risk_engine")
-    graph.add_edge("risk_engine", "explainer")
+    graph.add_edge("risk_engine", "explainer_retriever")
+    graph.add_edge("explainer_retriever", "explainer")
     graph.add_edge("explainer", "grounding_validator")
     graph.add_edge("grounding_validator", END)
 

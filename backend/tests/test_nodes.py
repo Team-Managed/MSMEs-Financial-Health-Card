@@ -10,6 +10,9 @@ from backend.app.graph.nodes import (
     node_weight_setter,
     node_stress_generator,
     node_risk_engine,
+    node_explainer_retriever,
+    node_explainer,
+    node_grounding_validator,
     _DEFAULT_WEIGHTS,
     _DEFAULT_RATIONALE,
 )
@@ -46,6 +49,47 @@ def test_risk_engine_node_produces_cfcr():
     result = node_risk_engine(state)
     assert "risk_output" in result
     assert result["risk_output"]["cfcr_baseline"] > 0
+
+
+def test_explainer_retriever_builds_risk_specific_second_query():
+    retriever = MagicMock()
+    retriever.query.return_value = [{"chunk_id": "explainer-1", "text": "Material risk"}]
+    risk_output = node_risk_engine({"profile": PERSONAS["buyer_concentrated"]})["risk_output"]
+
+    result = node_explainer_retriever({
+        "profile": PERSONAS["buyer_concentrated"],
+        "risk_output": risk_output,
+        "retriever": retriever,
+    })
+
+    query = retriever.query.call_args.args[0]
+    assert "buyer concentration" in query.lower()
+    assert "worst" in query.lower()
+    assert result["explainer_chunks"] == retriever.query.return_value
+
+
+@patch("backend.app.graph.nodes._get_gemini_model")
+def test_explainer_and_validator_use_only_explainer_chunks(mock_get_model):
+    response = MagicMock()
+    response.text = "Guidance applies [explainer-1]."
+    mock_get_model.return_value.generate_content.return_value = response
+    risk_output = node_risk_engine({"profile": PERSONAS["healthy"]})["risk_output"]
+    state = {
+        "profile": PERSONAS["healthy"],
+        "risk_output": risk_output,
+        "retrieved_chunks": [{"chunk_id": "weight-1", "source": "weights.pdf", "text": "Weights"}],
+        "explainer_chunks": [{"chunk_id": "explainer-1", "source": "risk.pdf", "text": "Risks"}],
+    }
+
+    narrative = node_explainer(state)["narrative"]
+    validation = node_grounding_validator({**state, "narrative": narrative})
+    prompt = mock_get_model.return_value.generate_content.call_args.args[0]
+
+    assert "explainer-1" in prompt
+    assert "weight-1" not in prompt
+    citation_checks = [item for item in validation["grounding_trace"] if item.type == "citation"]
+    assert citation_checks[0].source == "explainer-1"
+    assert citation_checks[0].status == "pass"
 
 
 @patch("backend.app.graph.nodes.genai")
