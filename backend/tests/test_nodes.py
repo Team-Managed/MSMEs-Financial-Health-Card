@@ -71,7 +71,15 @@ def test_explainer_retriever_builds_risk_specific_second_query():
 @patch("backend.app.graph.nodes._get_gemini_model")
 def test_explainer_and_validator_use_only_explainer_chunks(mock_get_model):
     response = MagicMock()
-    response.text = "Guidance applies [explainer-1]."
+    response.text = json.dumps({
+        "narrative": "Guidance applies [explainer-1].",
+        "claims": [{
+            "source_field": "__explainer_chunks__",
+            "value": "explainer-1",
+            "text": "Guidance applies.",
+            "type": "citation",
+        }],
+    })
     mock_get_model.return_value.generate_content.return_value = response
     risk_output = node_risk_engine({"profile": PERSONAS["healthy"]})["risk_output"]
     state = {
@@ -81,8 +89,8 @@ def test_explainer_and_validator_use_only_explainer_chunks(mock_get_model):
         "explainer_chunks": [{"chunk_id": "explainer-1", "source": "risk.pdf", "text": "Risks"}],
     }
 
-    narrative = node_explainer(state)["narrative"]
-    validation = node_grounding_validator({**state, "narrative": narrative})
+    explanation = node_explainer(state)
+    validation = node_grounding_validator({**state, **explanation})
     prompt = mock_get_model.return_value.generate_content.call_args.args[0]
 
     assert "explainer-1" in prompt

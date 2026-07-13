@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from typing import Any
 
 import google.generativeai as genai
 from langsmith import traceable
@@ -35,6 +36,237 @@ _REQUIRED_DIMS: frozenset[str] = frozenset({"gst", "upi", "aa", "epfo"})
 _NO_GUIDANCE_PHRASES = ("no retrieved guidance", "default used")
 # Matches any hard-coded percentage literal (e.g. "30%", "25 %") in rationale text.
 _CONTRADICTORY_PCT_RE = re.compile(r"\d+\s*%")
+_SAFE_SUMMARY_SOURCE = "__safe_summary__"
+_EXPLAINER_CHUNKS_SOURCE = "__explainer_chunks__"
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    return cleaned.strip()
+
+
+def _to_plain_data(value: Any) -> Any:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (str, int, float)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {k: _to_plain_data(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_plain_data(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _to_plain_data(value.model_dump())
+    if hasattr(value, "__dict__"):
+        return _to_plain_data(vars(value))
+    return value
+
+
+def _resolve_source_field(data: Any, source_field: str) -> Any:
+    current = data
+    for part in source_field.split("."):
+        match = re.fullmatch(r"([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(\d+)\])?", part)
+        if not match:
+            raise KeyError(f"Invalid source_field segment: {part!r}")
+        key = match.group(1)
+        idx = match.group(2)
+
+        if not isinstance(current, dict) or key not in current:
+            raise KeyError(f"Unknown source_field key: {key!r}")
+        current = current[key]
+
+        if idx is not None:
+            if not isinstance(current, list):
+                raise KeyError(f"source_field index used on non-list key: {key!r}")
+            i = int(idx)
+            if i < 0 or i >= len(current):
+                raise KeyError(f"source_field index out of range: {source_field!r}")
+            current = current[i]
+    return current
+
+
+def _numeric_tolerance(expected: float) -> float:
+    return max(abs(expected) * 0.001, 0.01)
+
+
+def _parse_explainer_output(raw_text: str) -> tuple[str, list[dict[str, Any]]]:
+    raw = _strip_code_fences(raw_text)
+    data = json.loads(raw)
+
+    if not isinstance(data, dict):
+        raise ValueError("Explainer response must be a JSON object")
+
+    narrative = data.get("narrative")
+    claims = data.get("claims")
+    if not isinstance(narrative, str) or not narrative.strip():
+        raise ValueError("Explainer response missing non-empty narrative")
+    if not isinstance(claims, list):
+        raise ValueError("Explainer response missing claims list")
+
+    normalized: list[dict[str, Any]] = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            raise ValueError("Each claim must be an object")
+        claim_type = claim.get("type")
+        source_field = claim.get("source_field")
+        text = claim.get("text")
+        value = claim.get("value")
+
+        if claim_type not in {"numeric", "citation"}:
+            raise ValueError("Claim type must be 'numeric' or 'citation'")
+        if not isinstance(source_field, str) or not source_field.strip():
+            raise ValueError("Claim source_field must be a non-empty string")
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Claim text must be a non-empty string")
+
+        if claim_type == "numeric":
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError("Numeric claim value must be a number")
+            normalized.append({
+                "type": "numeric",
+                "source_field": source_field.strip(),
+                "value": float(value),
+                "text": text.strip(),
+            })
+        else:
+            if source_field.strip() != _EXPLAINER_CHUNKS_SOURCE:
+                raise ValueError(
+                    "Citation claim source_field must be "
+                    f"{_EXPLAINER_CHUNKS_SOURCE!r}"
+                )
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("Citation claim value must be a non-empty chunk_id string")
+            normalized.append({
+                "type": "citation",
+                "source_field": source_field.strip(),
+                "value": value.strip(),
+                "text": text.strip(),
+            })
+
+    return narrative.strip(), normalized
+
+
+def _validate_claims(
+    claims: list[dict[str, Any]],
+    risk_output: dict[str, Any],
+    valid_chunk_ids: set[str],
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    from backend.app.schemas.models import GroundingCheck
+
+    trace: list[GroundingCheck] = []
+    validated: list[dict[str, Any]] = []
+
+    for claim in claims:
+        claim_type = claim["type"]
+        source_field = claim["source_field"]
+        value = claim["value"]
+        text = claim["text"]
+
+        if claim_type == "numeric":
+            try:
+                resolved = _resolve_source_field(risk_output, source_field)
+                if isinstance(resolved, bool) or not isinstance(resolved, (int, float)):
+                    raise ValueError("resolved source is not numeric")
+                expected = float(resolved)
+                tolerance = _numeric_tolerance(expected)
+                matched = abs(float(value) - expected) <= tolerance
+            except Exception:
+                matched = False
+
+            trace.append(GroundingCheck(
+                claim=text[:120],
+                type="numeric",
+                source=source_field,
+                status="pass" if matched else "fail",
+            ))
+            if matched:
+                validated.append(claim)
+            continue
+
+        is_valid_citation = value in valid_chunk_ids
+        trace.append(GroundingCheck(
+            claim=text[:120],
+            type="citation",
+            source=str(value),
+            status="pass" if is_valid_citation else "fail",
+        ))
+        if is_valid_citation:
+            validated.append(claim)
+
+    return trace, validated
+
+
+def _rewrite_from_validated_claims(validated_claims: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]] | None:
+    numeric_claims = [claim for claim in validated_claims if claim["type"] == "numeric"]
+    if not numeric_claims:
+        return None
+
+    summary_lines = [
+        "Grounding fallback summary: original narrative was replaced after grounding failures."
+    ]
+    for claim in numeric_claims[:4]:
+        summary_lines.append(f"{claim['source_field']} = {claim['value']:.4f}.")
+
+    citation_ids = sorted({claim["value"] for claim in validated_claims if claim["type"] == "citation"})
+    if citation_ids:
+        summary_lines.append("Validated guidance references: " + ", ".join(f"[{cid}]" for cid in citation_ids) + ".")
+
+    return " ".join(summary_lines), validated_claims
+
+
+def _build_safe_summary_from_risk(risk_output: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    cfcr_baseline = float(risk_output.get("cfcr_baseline", 0.0))
+    baseline_score = float(risk_output.get("baseline_score", 0.0))
+    cfcr_rows = risk_output.get("cfcr_by_scenario", [])
+
+    worst_index = None
+    worst_cfcr = cfcr_baseline
+    worst_scenario = "baseline"
+    for idx, row in enumerate(cfcr_rows):
+        scenario = row.get("scenario") if isinstance(row, dict) else None
+        cfcr = row.get("cfcr") if isinstance(row, dict) else None
+        if scenario == "baseline" or not isinstance(cfcr, (int, float)):
+            continue
+        if worst_index is None or float(cfcr) < worst_cfcr:
+            worst_index = idx
+            worst_cfcr = float(cfcr)
+            worst_scenario = str(scenario)
+
+    if worst_index is None:
+        worst_source = "cfcr_baseline"
+    else:
+        worst_source = f"cfcr_by_scenario[{worst_index}].cfcr"
+
+    narrative = (
+        "Limited-confidence deterministic summary: one or more generated claims failed grounding checks, "
+        "so the narrative was replaced with direct risk-engine facts only. "
+        f"Baseline CFCR is {cfcr_baseline:.4f}. "
+        f"Baseline Financial Health Score is {baseline_score:.2f}/100. "
+        f"Lowest stressed CFCR is {worst_cfcr:.4f} in {worst_scenario}."
+    )
+
+    claims = [
+        {
+            "type": "numeric",
+            "source_field": "cfcr_baseline",
+            "value": cfcr_baseline,
+            "text": f"Baseline CFCR is {cfcr_baseline:.4f}.",
+        },
+        {
+            "type": "numeric",
+            "source_field": "baseline_score",
+            "value": baseline_score,
+            "text": f"Baseline Financial Health Score is {baseline_score:.2f}/100.",
+        },
+        {
+            "type": "numeric",
+            "source_field": worst_source,
+            "value": worst_cfcr,
+            "text": f"Lowest stressed CFCR is {worst_cfcr:.4f} in {worst_scenario}.",
+        },
+    ]
+    return narrative, claims
 
 
 def _validate_rationale(
@@ -272,10 +504,19 @@ Write the Financial Health Card narrative (3–5 short paragraphs):
 5. Close with 1-sentence loan-officer recommendation
 
 Rules:
-- Every number you cite must appear exactly in the Risk Engine output above
-- Every regulatory/guidance claim must reference a retrieved chunk by [chunk_id]
-- If no chunk supports a claim, state the point without a citation
-- Do not invent chunk IDs
+- Every numeric claim must include a source_field that points to a key/path in Risk Engine output.
+- Every citation claim must include the cited retrieved chunk_id as value.
+- Do not invent chunk IDs.
+
+Respond with STRICT JSON ONLY (no markdown, no extra text):
+{{
+    "narrative": "<3-5 short paragraphs>",
+    "claims": [
+        {{"source_field": "cfcr_baseline", "value": 1.2345, "text": "Baseline CFCR is 1.2345.", "type": "numeric"}},
+        {{"source_field": "stress_results[0].delta", "value": -8.2, "text": "Receivable delay reduces score by 8.2 points.", "type": "numeric"}},
+        {{"source_field": "__explainer_chunks__", "value": "chunk_abc123", "text": "Concentration risk is material.", "type": "citation"}}
+    ]
+}}
 """
 
 
@@ -310,116 +551,90 @@ def node_explainer(state: dict) -> dict:
     try:
         model = _get_gemini_model()
         response = model.generate_content(prompt)
-        return {"narrative": response.text.strip()}
+        narrative, claims = _parse_explainer_output(response.text)
+        return {"narrative": narrative, "claims": claims}
     except Exception as exc:
         logger.warning("Explainer LLM call failed (%s)", exc)
+        safe_narrative, safe_claims = _build_safe_summary_from_risk(_to_plain_data(risk))
         return {
-            "narrative": (
-                f"CFCR baseline: {risk['cfcr_baseline']} "
-                f"({'PASS' if risk['cfcr_baseline'] >= 1.0 else 'FAIL'}). "
-                f"Financial Health Score: {risk['baseline_score']}/100. "
-                f"(Narrative generation unavailable — check GOOGLE_API_KEY.)"
-            )
+            "narrative": safe_narrative,
+            "claims": safe_claims,
         }
 
 
 # ── Node 5: Grounding Validator ───────────────────────────────────────────────
-
-def _extract_numbers_from_text(text: str) -> list[tuple[str, float]]:
-    """
-    Extract (context_snippet, value) pairs for numbers that look like
-    financial figures — catches both decimals (1.25) and whole numbers (72, 15000).
-    Minimum 2 digits for whole numbers to avoid false positives on single digits.
-    """
-    pattern = re.compile(r"(?<!\w)(\d{2,}(?:\.\d{1,4})?|\d+\.\d{1,4})(?!\w)")
-    results = []
-    for m in pattern.finditer(text):
-        start = max(0, m.start() - 40)
-        snippet = text[start: m.end() + 40].replace("\n", " ").strip()
-        results.append((snippet, float(m.group(1))))
-    return results
-
-
-def _flatten_risk_numbers(risk_output: dict) -> set[float]:
-    """Collect all numeric values from the risk_output structure. Skips booleans."""
-    numbers: set[float] = set()
-
-    def _walk(obj):
-        if isinstance(obj, bool):     # bool subclasses int — must check first
-            return
-        if isinstance(obj, (int, float)):
-            numbers.add(round(float(obj), 4))
-        elif isinstance(obj, dict):
-            for v in obj.values():
-                _walk(v)
-        elif isinstance(obj, list):
-            for item in obj:
-                _walk(item)
-        elif hasattr(obj, "__dict__"):
-            _walk(obj.__dict__)
-
-    _walk(risk_output)
-    return numbers
-
 
 @traceable(name="grounding-validator")
 def node_grounding_validator(state: dict) -> dict:
     from backend.app.schemas.models import GroundingCheck
 
     narrative: str = state.get("narrative", "")
-    risk_output: dict = state["risk_output"]
+    risk_output: dict = _to_plain_data(state["risk_output"])
     retrieved_chunks: list[dict] = state.get("explainer_chunks", [])
+    claims: list[dict[str, Any]] = state.get("claims", [])
     valid_chunk_ids = {c["chunk_id"] for c in retrieved_chunks}
 
     grounding_trace: list[GroundingCheck] = []
-    allowed_numbers = _flatten_risk_numbers(risk_output)
-
-    # 1. Numeric grounding check
-    for snippet, value in _extract_numbers_from_text(narrative):
-        tolerance = max(abs(value) * 0.01, 0.01)
-        matched = any(abs(value - n) <= tolerance for n in allowed_numbers)
+    if claims:
+        initial_trace, validated_claims = _validate_claims(claims, risk_output, valid_chunk_ids)
+        grounding_trace.extend(initial_trace)
+    else:
+        validated_claims = []
         grounding_trace.append(GroundingCheck(
-            claim=snippet[:120],
+            claim="Missing structured claims",
             type="numeric",
-            source="risk_engine_output",
-            status="pass" if matched else "fail",
+            source=_SAFE_SUMMARY_SOURCE,
+            status="fail",
         ))
 
-    # 2. Citation grounding check — find [chunk_id] patterns in narrative
-    cited = re.findall(r"\[([a-z0-9_\-]{4,32})\]", narrative)
-    for chunk_id in cited:
-        is_valid = chunk_id in valid_chunk_ids
-        grounding_trace.append(GroundingCheck(
-            claim=f"Citation [{chunk_id}]",
-            type="citation",
-            source=chunk_id,
-            status="pass" if is_valid else "fail",
-        ))
-
-    # 3. LLM fallback — only if any check failed
+    # 2. Fail-closed replacement path
     failed = [c for c in grounding_trace if c.status == "fail"]
     if failed:
-        try:
-            model = _get_gemini_model()
-            fail_summary = "\n".join(
-                f"- [{c.type}] {c.claim[:100]}" for c in failed
-            )
-            prompt = (
-                f"The following claims in a credit narrative failed grounding checks "
-                f"(numeric claims not found in source data, or citations not in retrieved docs):\n"
-                f"{fail_summary}\n\n"
-                f"For each failed claim, output one line: "
-                f"CLAIM: <original> | ISSUE: <why it fails> | FIX: <corrected version or 'remove'>"
-            )
-            response = model.generate_content(prompt)
-            grounding_trace.append(GroundingCheck(
-                claim="LLM fallback diagnosis",
-                type="numeric",
-                source="llm_fallback",
-                status="fail",
-            ))
-            state["grounding_llm_diagnosis"] = response.text.strip()
-        except Exception as exc:
-            logger.warning("Grounding LLM fallback failed (%s)", exc)
+        rewritten = _rewrite_from_validated_claims(validated_claims)
+        if rewritten is None:
+            rewritten_narrative, rewritten_claims = _build_safe_summary_from_risk(risk_output)
+        else:
+            rewritten_narrative, rewritten_claims = rewritten
 
-    return {"grounding_trace": grounding_trace}
+        rewrite_trace, _ = _validate_claims(rewritten_claims, risk_output, valid_chunk_ids)
+        grounding_trace.extend(rewrite_trace)
+
+        # If rewritten claims are still ambiguous/failing, force deterministic safe summary
+        if any(item.status == "fail" for item in rewrite_trace):
+            rewritten_narrative, rewritten_claims = _build_safe_summary_from_risk(risk_output)
+            safe_trace, _ = _validate_claims(rewritten_claims, risk_output, valid_chunk_ids)
+            grounding_trace.extend(safe_trace)
+
+        state["narrative"] = rewritten_narrative
+        state["claims"] = rewritten_claims
+
+        # Optional LLM diagnosis only; never used as authoritative rewrite.
+        if state.get("enable_grounding_diagnosis", False):
+            try:
+                model = _get_gemini_model()
+                fail_summary = "\n".join(
+                    f"- [{c.type}] {c.claim[:100]}" for c in failed
+                )
+                prompt = (
+                    f"The following claims in a credit narrative failed grounding checks "
+                    f"(numeric claims not found in source data, or citations not in retrieved docs):\n"
+                    f"{fail_summary}\n\n"
+                    f"For each failed claim, output one line: "
+                    f"CLAIM: <original> | ISSUE: <why it fails> | FIX: <corrected version or 'remove'>"
+                )
+                response = model.generate_content(prompt)
+                grounding_trace.append(GroundingCheck(
+                    claim="LLM fallback diagnosis",
+                    type="numeric",
+                    source="llm_fallback",
+                    status="fail",
+                ))
+                state["grounding_llm_diagnosis"] = response.text.strip()
+            except Exception as exc:
+                logger.warning("Grounding LLM fallback failed (%s)", exc)
+
+    return {
+        "narrative": state.get("narrative", narrative),
+        "claims": state.get("claims", claims),
+        "grounding_trace": grounding_trace,
+    }

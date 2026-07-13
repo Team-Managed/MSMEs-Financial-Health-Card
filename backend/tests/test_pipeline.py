@@ -53,7 +53,15 @@ def test_pipeline_makes_distinct_weight_and_explainer_retrieval_calls(mock_get_m
         ],
     })
     explainer_response = MagicMock()
-    explainer_response.text = "Risk guidance [explainer-chunk]."
+    explainer_response.text = json.dumps({
+        "narrative": "Risk guidance [explainer-chunk].",
+        "claims": [{
+            "source_field": "__explainer_chunks__",
+            "value": "explainer-chunk",
+            "text": "Risk guidance applies.",
+            "type": "citation",
+        }],
+    })
     mock_get_model.return_value.generate_content.side_effect = [weight_response, explainer_response]
     retriever = RecordingRetriever()
 
