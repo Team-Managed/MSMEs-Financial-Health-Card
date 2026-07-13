@@ -21,3 +21,6 @@ node_modules/
 .vscode/
 .idea/
 *.swp
+
+# macOS
+.DS_Store

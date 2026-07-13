@@ -17,15 +17,18 @@ _DEFAULT_CHROMA_DIR = str(Path(__file__).parent / "chroma_store")
 
 class Retriever:
     def __init__(self, chroma_dir: str = _DEFAULT_CHROMA_DIR):
-        self._ef = SentenceTransformerEmbeddingFunction(model_name=_EMBED_MODEL)
+        self._col = None
+        if not (Path(chroma_dir) / "chroma.sqlite3").exists():
+            logger.warning("RAG index is not built — retriever will return []")
+            return
         try:
+            self._ef = SentenceTransformerEmbeddingFunction(model_name=_EMBED_MODEL)
             self._client = chromadb.PersistentClient(path=chroma_dir)
             self._col = self._client.get_or_create_collection(
                 _COLLECTION_NAME, embedding_function=self._ef
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("ChromaDB init failed (%s) — retriever will return []", exc)
-            self._col = None
 
     def query(self, text: str, n_results: int = 5) -> list[dict]:
         if self._col is None:

@@ -1,6 +1,16 @@
 from __future__ import annotations
 from typing import Literal
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+
+
+SUPPORTED_SECTORS = (
+    "manufacturing",
+    "services",
+    "textiles",
+    "agri-processing",
+    "trading",
+    "food-processing",
+)
 
 
 class GSTData(BaseModel):
@@ -54,6 +64,12 @@ class WeightVector(BaseModel):
             raise ValueError("weight must be between 0 and 1")
         return v
 
+    @model_validator(mode="after")
+    def weights_must_sum_to_one(self) -> "WeightVector":
+        if abs(sum(self.model_dump().values()) - 1.0) > 0.0001:
+            raise ValueError("weights must sum to 1.0")
+        return self
+
 
 class WeightRationaleItem(BaseModel):
     dimension: Literal["gst", "upi", "aa", "epfo"]
@@ -82,7 +98,14 @@ class GroundingCheck(BaseModel):
 
 
 class CustomAnalyzeRequest(BaseModel):
-    sector: str
+    sector: Literal[
+        "manufacturing",
+        "services",
+        "textiles",
+        "agri-processing",
+        "trading",
+        "food-processing",
+    ]
     years_operating: int
     profile_type: Literal["healthy", "ntc", "buyer_concentrated", "seasonal"]
     msme_tier: Literal["micro", "small", "medium"] = "micro"

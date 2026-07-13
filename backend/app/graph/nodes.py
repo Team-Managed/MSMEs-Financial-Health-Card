@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 #   LLM_API_KEY   (falls back to GOOGLE_API_KEY)
 
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-_DEFAULT_MODEL    = "gemini-2.5-flash"
+_DEFAULT_MODEL    = "gemini-3.1-flash-lite"
 
 
 def _llm_client() -> OpenAI:
@@ -76,6 +76,15 @@ class _WeightSetterOutput(_BaseModel):
 class _NarrativeOutput(_BaseModel):
     """Schema-locked output for the Explainer agent."""
     narrative: str
+
+
+def _validate_weight_setter_output(output: _WeightSetterOutput, chunks: list[dict]) -> None:
+    dimensions = [item.dimension for item in output.rationale]
+    if set(dimensions) != {"gst", "upi", "aa", "epfo"} or len(dimensions) != 4:
+        raise ValueError("weight rationale must cover each dimension exactly once")
+    allowed_chunk_ids = {chunk["chunk_id"] for chunk in chunks} | {"default"}
+    if any(item.cited_chunk_id not in allowed_chunk_ids for item in output.rationale):
+        raise ValueError("weight rationale contains an unknown chunk ID")
 
 
 # ── Node 1: Data Aggregator ───────────────────────────────────────────────────
@@ -136,12 +145,16 @@ def node_weight_setter(state: dict) -> dict:
         f"[{c['chunk_id']}] ({c['source']}, {c['section']}): {html.escape(c['text'][:300])}"
         for c in chunks
     )
+    sector = html.escape(str(profile.sector))
+    years_operating = html.escape(str(profile.years_operating))
+    new_to_credit = html.escape(str(profile.aa_bank_data.existing_loan_count == 0))
+    counterparty_share = html.escape(f"{profile.upi.top_counterparty_share:.0%}")
     user_msg = (
         f"<profile-data>\n"
-        f"- Sector: {profile.sector}\n"
-        f"- Years operating: {profile.years_operating}\n"
-        f"- New-to-credit: {profile.aa_bank_data.existing_loan_count == 0}\n"
-        f"- Top UPI counterparty share: {profile.upi.top_counterparty_share:.0%}\n"
+        f"- Sector: {sector}\n"
+        f"- Years operating: {years_operating}\n"
+        f"- New-to-credit: {new_to_credit}\n"
+        f"- Top UPI counterparty share: {counterparty_share}\n"
         f"</profile-data>\n\n"
         f"<retrieved-guidance>\n{chunks_text}\n</retrieved-guidance>"
     )
@@ -159,6 +172,7 @@ def node_weight_setter(state: dict) -> dict:
         )
         text = response.choices[0].message.content.strip()
         output = _WeightSetterOutput.model_validate_json(text)
+        _validate_weight_setter_output(output, chunks)
         usage = response.usage
         input_tok  = usage.prompt_tokens     if usage else 0
         output_tok = usage.completion_tokens if usage else 0
@@ -231,10 +245,13 @@ def node_explainer(state: dict) -> dict:
         f"[{c['chunk_id']}] ({c['source']}): {html.escape(c['text'][:300])}"
         for c in chunks
     ) or "(no retrieved guidance available)"
+    business_name = html.escape(str(profile.business_name))
+    sector = html.escape(str(profile.sector))
+    years_operating = html.escape(str(profile.years_operating))
 
     user_msg = (
         f"<profile-data>\n"
-        f"MSME: {profile.business_name} ({profile.sector}, {profile.years_operating} years)\n"
+        f"MSME: {business_name} ({sector}, {years_operating} years)\n"
         f"</profile-data>\n\n"
         f"<risk-engine-output>\n"
         f"- Baseline CFCR: {risk['cfcr_baseline']} (\u22651.0 = survives shock; <1.0 = liquidity failure)\n"

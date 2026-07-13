@@ -95,6 +95,7 @@ def analyze_custom(req: CustomAnalyzeRequest):
         years_operating=req.years_operating,
         msme_tier=req.msme_tier,
         employee_tier=req.employee_tier,
+        gst_registered=req.gst_registered,
     )
     try:
         state = run_pipeline_with_profile(profile, retriever=_retriever)

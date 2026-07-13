@@ -1,27 +1,37 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import type { AnalysisResponse } from "@/lib/types";
-import { analyzeCustom } from "@/lib/api";
+import type { AnalysisResponse, Persona } from "@/lib/types";
+import { analyzeCustom, analyzePersona, fetchPersonas } from "@/lib/api";
 import ProfileForm from "./ProfileForm";
 import type { AnalysisParams } from "./ProfileForm";
 import HealthCard from "./HealthCard";
 import WeightRationale from "./WeightRationale";
+import PersonaSelector from "./PersonaSelector";
+import GroundingTrace from "./GroundingTrace";
 
 // Lazy-load recharts-heavy component — only needed after a user triggers analysis
 const StressPanel = dynamic(() => import("./StressPanel"), { ssr: false });
 
 export default function Dashboard() {
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (params: AnalysisParams) => {
+  useEffect(() => {
+    fetchPersonas().then(setPersonas).catch(() => {
+      setError("Could not load demo personas. Is the backend running?");
+    });
+  }, []);
+
+  const runAnalysis = async (request: () => Promise<AnalysisResponse>) => {
     setResult(null);
     setError(null);
     setLoading(true);
     try {
-      const data = await analyzeCustom(params);
+      const data = await request();
       setResult(data);
     } catch (e) {
       setError(
@@ -30,6 +40,16 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePersonaSelect = (id: string) => {
+    setSelectedPersonaId(id);
+    void runAnalysis(() => analyzePersona(id));
+  };
+
+  const handleSubmit = (params: AnalysisParams) => {
+    setSelectedPersonaId(null);
+    void runAnalysis(() => analyzeCustom(params));
   };
 
   return (
@@ -50,10 +70,18 @@ export default function Dashboard() {
           </div>
         ) : null}
 
-        {/* Phase 1: no result yet — centered form */}
+        {/* Phase 1: deterministic demo personas and custom analysis */}
         {result === null && !loading ? (
-          <div className="mx-auto max-w-lg rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-            <ProfileForm onSubmit={handleSubmit} loading={loading} />
+          <div className="mx-auto grid max-w-4xl grid-cols-1 gap-6 lg:grid-cols-2">
+            <PersonaSelector
+              personas={personas}
+              selected={selectedPersonaId}
+              onSelect={handlePersonaSelect}
+              loading={loading}
+            />
+            <div className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
+              <ProfileForm onSubmit={handleSubmit} loading={loading} />
+            </div>
           </div>
         ) : null}
 
@@ -73,6 +101,12 @@ export default function Dashboard() {
         {result !== null && !loading ? (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-[340px_1fr]">
             <div className="space-y-4">
+              <PersonaSelector
+                personas={personas}
+                selected={selectedPersonaId}
+                onSelect={handlePersonaSelect}
+                loading={loading}
+              />
               <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
                 <ProfileForm onSubmit={handleSubmit} loading={loading} />
               </div>
@@ -81,6 +115,7 @@ export default function Dashboard() {
             <div className="space-y-6">
               <HealthCard data={result} />
               <StressPanel data={result} />
+              <GroundingTrace data={result} />
             </div>
           </div>
         ) : null}

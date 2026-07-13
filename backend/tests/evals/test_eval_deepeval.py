@@ -15,7 +15,7 @@ L-P  FaithfulnessMetric on Explainer output under adversarial chunk injection
      Threshold = faithfulness ≥ 0.7 for ≥7 / 10 adversarial variants
      Reports a per-variant faithfulness table.
 
-Judge model: Gemini 2.5 Flash (same API key as the pipeline — no extra cost
+Judge model: Gemini 3.1 Flash Lite (same API key as the pipeline — no extra cost
 or additional credentials required).
 
 Both test groups require GOOGLE_API_KEY and are skipped if it is not set.
@@ -91,7 +91,7 @@ class _GeminiJudge(DeepEvalBaseLLM):
             "https://generativelanguage.googleapis.com/v1beta/openai/",
         )
         self._client = _OpenAI(api_key=api_key, base_url=base_url)
-        self._model = os.environ.get("LLM_JUDGE_MODEL", os.environ.get("LLM_MODEL", "llama-3.3-70b-versatile"))
+        self._model = os.environ.get("LLM_JUDGE_MODEL", os.environ.get("LLM_MODEL", "gemini-3.1-flash-lite"))
 
     def load_model(self):
         return self._client

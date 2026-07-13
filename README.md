@@ -12,7 +12,7 @@ uv sync
 cp .env.example .env          # add your GOOGLE_API_KEY
 # Optional: add PDFs to backend/app/rag/corpus/ then run:
 # uv run python -m app.rag.build_index
-uv run uvicorn app.main:app --reload --port 8000
+uv run uvicorn --app-dir .. backend.app.main:app --reload --port 8000
 ```
 
 ### Frontend

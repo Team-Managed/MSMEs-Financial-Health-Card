@@ -106,13 +106,18 @@ def _apply_stress(profile: MSMEProfile, scenario: str) -> tuple[MSMEProfile, str
     p = copy.deepcopy(profile)
 
     if scenario == "receivable_delay_60d":
-        # Delay inflows: reduce last 2 months of inflows by 40%, spike overdraft
-        p.upi.monthly_inflow_series[-1] *= 0.6
-        p.upi.monthly_inflow_series[-2] *= 0.6
+        # Delay the liquid receivables that feed the CFCR's top-three numerator.
+        top_indexes = sorted(
+            range(len(p.upi.monthly_inflow_series)),
+            key=p.upi.monthly_inflow_series.__getitem__,
+            reverse=True,
+        )[:3]
+        for index in top_indexes:
+            p.upi.monthly_inflow_series[index] *= 0.6
         p.aa_bank_data.overdraft_utilization_rate = min(
             p.aa_bank_data.overdraft_utilization_rate + 0.20, 1.0
         )
-        driver = "UPI inflows delayed 60d (−40% last 2 months); overdraft +20pp"
+        driver = "Near-term receivables delayed 60d (−40% top 3 inflows); overdraft +20pp"
 
     elif scenario == "revenue_drop_20pct":
         p.gst.monthly_turnover_series = [v * 0.80 for v in p.gst.monthly_turnover_series]

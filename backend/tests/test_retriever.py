@@ -1,6 +1,7 @@
 import os
 import tempfile
 import pytest
+from unittest.mock import patch
 from backend.app.rag.retriever import Retriever
 
 
@@ -9,6 +10,14 @@ def test_retriever_returns_empty_list_when_no_corpus(tmp_path):
     r = Retriever(chroma_dir=str(tmp_path / "empty_chroma"))
     results = r.query("MSME credit risk")
     assert results == []
+
+
+def test_retriever_does_not_load_embeddings_without_an_index(tmp_path):
+    with patch("backend.app.rag.retriever.SentenceTransformerEmbeddingFunction") as embedding_factory:
+        retriever = Retriever(chroma_dir=str(tmp_path / "missing_chroma"))
+
+    assert retriever.query("MSME credit risk") == []
+    embedding_factory.assert_not_called()
 
 
 def test_retriever_roundtrip(tmp_path):

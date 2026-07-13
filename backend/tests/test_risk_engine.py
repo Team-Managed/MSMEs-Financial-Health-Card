@@ -58,3 +58,15 @@ def test_ntc_persona_emi_zero_does_not_divide_by_zero():
         operating_outflow=profile.aa_bank_data.estimated_monthly_operating_outflow,
     )
     assert cfcr > 0
+
+
+@pytest.mark.parametrize("persona_id", ["healthy", "ntc", "buyer_concentrated", "seasonal"])
+def test_receivable_delay_reduces_cfcr(persona_id):
+    result = compute_risk(
+        PERSONAS[persona_id], WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15),
+    )
+    delayed = next(
+        item for item in result["cfcr_by_scenario"]
+        if item.scenario == "receivable_delay_60d"
+    )
+    assert delayed.cfcr < result["cfcr_baseline"]
