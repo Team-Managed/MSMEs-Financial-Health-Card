@@ -30,6 +30,15 @@ export interface StressResult {
   key_drivers: string[];
 }
 
+export interface TailRiskResult {
+  probability_cfcr_below_one: number;
+  cfcr_p05: number;
+  expected_shortfall: number;
+  simulations: number;
+  model_version: string;
+  assumptions: string[];
+}
+
 export interface GroundingCheck {
   claim: string;
   type: "numeric" | "citation";
@@ -45,6 +54,7 @@ export interface AnalysisResponse {
   weight_rationale: WeightRationaleItem[];
   baseline_score: number;
   stress_results: StressResult[];
+  tail_risk: TailRiskResult;
   narrative: string;
   grounding_trace: GroundingCheck[];
 }

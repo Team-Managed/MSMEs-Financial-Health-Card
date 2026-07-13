@@ -1,110 +1,150 @@
 "use client";
+
 import {
-  BarChart,
   Bar,
-  XAxis,
-  YAxis,
+  BarChart,
   CartesianGrid,
-  Tooltip,
+  Cell,
   ReferenceLine,
   ResponsiveContainer,
-  Cell,
+  Tooltip,
+  XAxis,
+  YAxis,
 } from "recharts";
+import { CircleAlert, ShieldCheck } from "lucide-react";
 import type { AnalysisResponse } from "@/lib/types";
 
-const SCENARIO_LABELS: Record<string, string> = {
-  receivable_delay_60d: "Receivable Delay 60d",
-  revenue_drop_20pct: "Revenue Drop 20%",
-  buyer_loss: "Buyer Loss",
-  rate_hike: "Rate Hike +15%",
+const LABELS: Record<string, string> = {
+  receivable_delay_60d: "60d receivable delay",
+  revenue_drop_20pct: "20% revenue drop",
+  buyer_loss: "Primary buyer loss",
+  rate_hike: "15% rate hike",
 };
 
-interface Props {
-  data: AnalysisResponse;
-}
-
-export default function StressPanel({ data }: Props) {
-  const cfcrData = data.cfcr_by_scenario
-    .filter((r) => r.scenario !== "baseline")
-    .map((r) => ({
-      name: SCENARIO_LABELS[r.scenario] ?? r.scenario,
-      cfcr: r.cfcr,
-      passFail: r.pass_fail,
-    }));
-
-  const scoreData = data.stress_results.map((r) => ({
-    name: SCENARIO_LABELS[r.scenario] ?? r.scenario,
-    delta: r.delta,
-    stressed_score: r.stressed_score,
-    key_driver: r.key_drivers[0] ?? "",
-  }));
+export default function StressPanel({ data }: { data: AnalysisResponse }) {
+  const scoreByScenario = new Map(
+    data.stress_results.map((item) => [item.scenario, item]),
+  );
+  const scenarios = data.cfcr_by_scenario
+    .filter((item) => item.scenario !== "baseline")
+    .map((item) => ({
+      ...item,
+      label: LABELS[item.scenario] ?? item.scenario,
+      score: scoreByScenario.get(item.scenario),
+    }))
+    .sort((left, right) => left.cfcr - right.cfcr);
+  const tailRisk = data.tail_risk;
 
   return (
-    <div className="space-y-5">
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-slate-700">
-          CFCR Under Stress Scenarios
-        </h3>
-        <p className="mb-4 text-xs text-slate-400">
-          Red = CFCR drops below 1.0 (liquidity failure). Baseline:{" "}
-          {data.cfcr_baseline.toFixed(2)}
-        </p>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart
-            data={cfcrData}
-            margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
-          >
-            <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-            <YAxis
-              domain={[0, Math.max(data.cfcr_baseline * 1.2, 1.5)]}
-              tick={{ fontSize: 11 }}
-            />
-            <Tooltip
-              formatter={(v) =>
-                typeof v === "number" ? v.toFixed(3) : String(v ?? "")
-              }
-            />
-            <ReferenceLine
-              y={1.0}
-              stroke="#ef4444"
-              strokeDasharray="4 2"
-              label={{ value: "1.0 threshold", fontSize: 11, fill: "#ef4444" }}
-            />
-            <Bar dataKey="cfcr" radius={[4, 4, 0, 0]}>
-              {cfcrData.map((entry, i) => (
-                <Cell key={i} fill={entry.passFail ? "#3b82f6" : "#ef4444"} />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+    <section className="analysis-panel stress-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">Downside analysis</p>
+          <h2>Stress test matrix</h2>
+        </div>
+        <span>Baseline CFCR {data.cfcr_baseline.toFixed(2)}</span>
       </div>
-
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-slate-700">
-          Health Score Impact
-        </h3>
-        <div className="space-y-3">
-          {scoreData.map((r) => (
-            <div key={r.name} className="rounded-md bg-slate-50 p-3">
-              <div className="flex items-center justify-between">
-                <span className="text-sm font-medium text-slate-700">
-                  {r.name}
-                </span>
-                <span
-                  className={`text-sm font-bold tabular-nums ${r.delta < 0 ? "text-red-600" : "text-emerald-600"}`}
-                >
-                  {r.delta > 0 ? "+" : ""}
-                  {r.delta.toFixed(1)} pts → {r.stressed_score.toFixed(0)}/100
-                </span>
+      <div className="stress-layout">
+        <div className="chart-wrap">
+          <ResponsiveContainer width="100%" height={260}>
+            <BarChart
+              data={scenarios}
+              margin={{ top: 10, right: 10, left: -20, bottom: 18 }}
+            >
+              <CartesianGrid vertical={false} stroke="#dde2df" />
+              <XAxis
+                dataKey="label"
+                tick={{ fontSize: 10, fill: "#5f6864" }}
+                interval={0}
+                angle={-8}
+                textAnchor="end"
+              />
+              <YAxis
+                tick={{ fontSize: 10, fill: "#7b837f" }}
+                domain={[0, "auto"]}
+              />
+              <Tooltip
+                cursor={{ fill: "#f1f3ef" }}
+                formatter={(value) => [Number(value).toFixed(2), "CFCR"]}
+              />
+              <ReferenceLine
+                y={1}
+                stroke="#b4413a"
+                strokeDasharray="5 4"
+                label={{ value: "minimum", fill: "#9c3732", fontSize: 10 }}
+              />
+              <Bar dataKey="cfcr" radius={[3, 3, 0, 0]} maxBarSize={44}>
+                {scenarios.map((item) => (
+                  <Cell
+                    key={item.scenario}
+                    fill={item.pass_fail ? "#315c4b" : "#b4413a"}
+                  />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="scenario-list">
+          {scenarios.map((item) => (
+            <article key={item.scenario}>
+              <span className={item.pass_fail ? "status-pass" : "status-fail"}>
+                {item.pass_fail ? (
+                  <ShieldCheck size={15} />
+                ) : (
+                  <CircleAlert size={15} />
+                )}
+              </span>
+              <div>
+                <strong>{item.label}</strong>
+                <small>
+                  {item.score?.key_drivers[0] ?? "Scenario applied"}
+                </small>
               </div>
-              {r.key_driver && (
-                <p className="mt-1 text-xs text-slate-400">{r.key_driver}</p>
-              )}
-            </div>
+              <div className="scenario-metrics">
+                <strong>{item.cfcr.toFixed(2)}</strong>
+                <small>{item.score?.delta.toFixed(1) ?? "0.0"} pts</small>
+              </div>
+            </article>
           ))}
         </div>
       </div>
-    </div>
+      {tailRisk ? (
+        <div className="tail-risk-summary">
+          <div className="tail-risk-intro">
+            <p className="eyebrow">Sensitivity distribution</p>
+            <h3>Borrower cash-flow tail</h3>
+            <p>
+              Seeded resampling complements the named scenarios. It is not an
+              approval or calibrated probability of default.
+            </p>
+          </div>
+          <dl className="tail-risk-metrics">
+            <div>
+              <dt>CFCR below 1.00</dt>
+              <dd>{(tailRisk.probability_cfcr_below_one * 100).toFixed(1)}%</dd>
+            </div>
+            <div>
+              <dt>5th percentile CFCR</dt>
+              <dd>{tailRisk.cfcr_p05.toFixed(2)}x</dd>
+            </div>
+            <div>
+              <dt>Average gap when below 1.00</dt>
+              <dd>{tailRisk.expected_shortfall.toFixed(2)}x</dd>
+            </div>
+          </dl>
+          <details className="tail-risk-assumptions">
+            <summary>
+              Review {tailRisk.simulations.toLocaleString()} simulation
+              assumptions
+            </summary>
+            <ul>
+              {tailRisk.assumptions.map((assumption) => (
+                <li key={assumption}>{assumption}</li>
+              ))}
+            </ul>
+          </details>
+        </div>
+      ) : null}
+    </section>
   );
 }
