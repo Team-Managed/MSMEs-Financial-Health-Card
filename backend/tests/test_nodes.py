@@ -45,20 +45,8 @@ def test_risk_engine_node_produces_cfcr():
     assert result["risk_output"]["cfcr_baseline"] > 0
 
 
-@patch("backend.app.graph.nodes.genai")
-def test_weight_setter_returns_weight_vector(mock_genai):
-    """Mock the Gemini call so the test doesn't need a real API key."""
-    mock_response = MagicMock()
-    mock_response.text = """{
-        "weights": {"gst": 0.30, "upi": 0.30, "aa": 0.25, "epfo": 0.15},
-        "rationale": [
-            {"dimension": "gst", "reasoning": "GST data strong.", "cited_chunk_id": ""},
-            {"dimension": "upi", "reasoning": "UPI reliable.", "cited_chunk_id": ""},
-            {"dimension": "aa", "reasoning": "Good repayment.", "cited_chunk_id": ""},
-            {"dimension": "epfo", "reasoning": "Stable payroll.", "cited_chunk_id": ""}
-        ]
-    }"""
-    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+def test_weight_setter_returns_weight_vector():
+    """With no RAG chunks the node returns default weights without calling the LLM."""
     state = {
         "profile": PERSONAS["healthy"],
         "retrieved_chunks": [],

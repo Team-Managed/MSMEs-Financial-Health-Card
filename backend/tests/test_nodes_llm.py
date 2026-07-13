@@ -20,15 +20,18 @@ def _make_state():
     }
 
 
-@patch("backend.app.graph.nodes.genai")
-def test_explainer_returns_narrative(mock_genai):
+@patch("backend.app.graph.nodes._llm_model", return_value="test-model")
+@patch("backend.app.graph.nodes._llm_client")
+def test_explainer_returns_narrative(mock_client_fn, mock_model_fn):
     mock_response = MagicMock()
-    mock_response.text = (
+    mock_response.choices = [MagicMock()]
+    mock_response.choices[0].message.content = (
         "The business shows a CFCR of 1.20 under baseline conditions. "
         "The buyer_loss scenario reduces CFCR significantly. "
         "Per RBI guidance [c001], concentrated counterparty exposure is a key risk factor."
     )
-    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    mock_response.usage = None
+    mock_client_fn.return_value.chat.completions.create.return_value = mock_response
     state = _make_state()
     result = node_explainer(state)
     assert "narrative" in result
