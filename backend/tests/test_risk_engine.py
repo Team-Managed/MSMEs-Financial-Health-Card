@@ -99,6 +99,21 @@ def test_rate_hike_lowers_score_emi_positive():
             )
 
 
+def test_stress_does_not_mutate_original_profile():
+    """compute_risk must not mutate the original profile object for any persona."""
+    weights = WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15)
+    for name, profile in PERSONAS.items():
+        orig_turnover = list(profile.gst.monthly_turnover_series)
+        orig_overdraft = profile.aa_bank_data.overdraft_utilization_rate
+        compute_risk(profile, weights)
+        assert list(profile.gst.monthly_turnover_series) == orig_turnover, (
+            f"gst.monthly_turnover_series mutated for persona '{name}'"
+        )
+        assert profile.aa_bank_data.overdraft_utilization_rate == orig_overdraft, (
+            f"aa_bank_data.overdraft_utilization_rate mutated for persona '{name}'"
+        )
+
+
 def test_rate_hike_no_effect_ntc_no_emi():
     """rate_hike must not change score for NTC profile with zero EMI."""
     weights = WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15)

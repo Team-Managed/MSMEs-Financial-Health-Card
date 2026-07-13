@@ -68,7 +68,7 @@ def _upi_score(upi) -> float:
     outflows = upi.monthly_outflow_series
     net_flows = [i - o for i, o in zip(inflows, outflows)]
     mean_net = float(np.mean(net_flows))
-    mean_inflow = float(np.mean(inflows)) if inflows else 1.0
+    mean_inflow = float(np.mean(inflows)) if inflows else 0.0
 
     # Stability: penalise high CV; zero/negative mean → full instability
     cv = float(np.std(net_flows) / mean_net) if mean_net > 0 else 1.0
@@ -153,6 +153,8 @@ def _apply_stress(profile: MSMEProfile, scenario: str) -> tuple[MSMEProfile, str
         # term reflects the revenue shock.  If current YoY = g, a 20% fall in
         # this year's revenue gives new_yoy = 0.8*(1+g) − 1.
         g = p.gst.yoy_growth_rate
+        # monthly_turnover_series is scaled to keep stressed-profile data consistent;
+        # yoy_growth_rate (derived from it) is the actual input to _gst_score's trend term.
         p.gst.monthly_turnover_series = [v * 0.80 for v in p.gst.monthly_turnover_series]
         p.gst.yoy_growth_rate = round(0.8 * (1.0 + g) - 1.0, 6)
         p.upi.monthly_inflow_series = [v * 0.80 for v in p.upi.monthly_inflow_series]
