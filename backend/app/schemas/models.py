@@ -1,6 +1,7 @@
 from __future__ import annotations
+import math
 from typing import Literal
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 
 class GSTData(BaseModel):
@@ -49,10 +50,19 @@ class WeightVector(BaseModel):
 
     @field_validator("gst", "upi", "aa", "epfo")
     @classmethod
-    def must_be_between_0_and_1(cls, v: float) -> float:
+    def must_be_finite_and_between_0_and_1(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("weight must be a finite number")
         if not 0.0 <= v <= 1.0:
             raise ValueError("weight must be between 0 and 1")
         return v
+
+    @model_validator(mode="after")
+    def weights_must_sum_to_one(self) -> "WeightVector":
+        total = self.gst + self.upi + self.aa + self.epfo
+        if abs(total - 1.0) > 1e-6:
+            raise ValueError(f"weights must sum to 1.0, got {total:.8f}")
+        return self
 
 
 class WeightRationaleItem(BaseModel):

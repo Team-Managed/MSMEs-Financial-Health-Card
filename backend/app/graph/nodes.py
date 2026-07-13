@@ -27,6 +27,58 @@ _DEFAULT_RATIONALE = [
     WeightRationaleItem(dimension="epfo", reasoning="EPFO payroll consistency weighted at 15% as an indicator of workforce stability and operational continuity.", cited_chunk_id="default"),
 ]
 
+# Map for fast lookup during rationale validation
+_DEFAULT_RATIONALE_MAP: dict[str, WeightRationaleItem] = {
+    item.dimension: item for item in _DEFAULT_RATIONALE
+}
+_REQUIRED_DIMS: frozenset[str] = frozenset({"gst", "upi", "aa", "epfo"})
+_NO_GUIDANCE_PHRASES = ("no retrieved guidance", "default used")
+
+
+def _validate_rationale(
+    rationale: list[WeightRationaleItem],
+    retrieved_chunk_ids: set[str],
+) -> list[WeightRationaleItem] | None:
+    """Validate/normalize LLM-produced rationale against the retrieved chunk set.
+
+    Returns a validated (possibly normalized) list, or None to signal full
+    fallback to documented defaults.  Rules:
+    - Duplicate or missing dimensions → None
+    - Non-empty, non-'default' cited_chunk_id absent from retrieved_chunk_ids → None
+    - Empty cited_chunk_id without an explicit "no retrieved guidance / default used"
+      phrase in reasoning → replace that item with the documented default
+    """
+    dims = [item.dimension for item in rationale]
+    if set(dims) != _REQUIRED_DIMS or len(dims) != len(_REQUIRED_DIMS):
+        logger.warning("Rationale dimension mismatch %s — using defaults", dims)
+        return None
+
+    result: list[WeightRationaleItem] = []
+    for item in rationale:
+        cid = item.cited_chunk_id
+        if cid and cid != "default":
+            if cid not in retrieved_chunk_ids:
+                logger.warning(
+                    "Fabricated chunk ID %r not in retrieved set — using defaults", cid
+                )
+                return None
+            result.append(item)
+        elif not cid:
+            lower = item.reasoning.lower()
+            if any(phrase in lower for phrase in _NO_GUIDANCE_PHRASES):
+                result.append(item)
+            else:
+                logger.warning(
+                    "Empty cited_chunk_id for '%s' without explicit default/no-guidance "
+                    "phrase — normalizing to documented default",
+                    item.dimension,
+                )
+                result.append(_DEFAULT_RATIONALE_MAP[item.dimension])
+        else:
+            # cited_chunk_id == "default" — already canonical
+            result.append(item)
+    return result
+
 
 def _get_gemini_model() -> genai.GenerativeModel:
     api_key = os.environ.get("GOOGLE_API_KEY")
@@ -124,7 +176,11 @@ def node_weight_setter(state: dict) -> dict:
         data = json.loads(raw)
         weights = WeightVector(**data["weights"])
         rationale = [WeightRationaleItem(**r) for r in data["rationale"]]
-        return {"weights": weights, "weight_rationale": rationale}
+        retrieved_chunk_ids = {c["chunk_id"] for c in chunks}
+        validated_rationale = _validate_rationale(rationale, retrieved_chunk_ids)
+        if validated_rationale is None:
+            return {"weights": _DEFAULT_WEIGHTS, "weight_rationale": _DEFAULT_RATIONALE}
+        return {"weights": weights, "weight_rationale": validated_rationale}
     except Exception as exc:
         logger.warning("Weight-setter LLM call failed (%s) — using defaults", exc)
         return {"weights": _DEFAULT_WEIGHTS, "weight_rationale": _DEFAULT_RATIONALE}
