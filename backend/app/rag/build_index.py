@@ -18,21 +18,21 @@ logging.basicConfig(level=logging.INFO)
 
 CORPUS_DIR = Path(__file__).parent / "corpus"
 CHROMA_DIR = Path(__file__).parent / "chroma_store"
-CHUNK_SIZE = 500          # tokens (approximate — we split by ~500 words)
-CHUNK_OVERLAP = 50        # words
 COLLECTION_NAME = "rag_corpus"
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter as _RCS  # noqa: E402
 
-def _chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    words = text.split()
-    chunks = []
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-        chunks.append(" ".join(words[start:end]))
-        start += chunk_size - overlap
-    return chunks
+_splitter = _RCS(
+    chunk_size=800,           # characters — ~200 tokens, well within embed model window
+    chunk_overlap=100,
+    separators=["\n\n", "\n", ". ", "! ", "? ", ", ", " ", ""],
+)
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Recursively split text, respecting sentence and paragraph boundaries."""
+    return _splitter.split_text(text)
 
 
 def _extract_text_from_pdf(pdf_path: Path) -> str:

@@ -2,9 +2,15 @@
 LangGraph pipeline definition.
 Graph: aggregator → sector_retriever → weight_setter → stress_generator
        → risk_engine → explainer → grounding_validator
+
+LangSmith tracing is activated by the @traceable decorators on each node and
+on run_pipeline. _init_langsmith() logs the active state at startup and
+swallows all errors so a missing/invalid key never crashes the server.
 """
 from __future__ import annotations
+import logging
 import operator
+import os
 from typing import Annotated
 from langgraph.graph import StateGraph, END
 from langsmith import traceable
@@ -19,6 +25,25 @@ from backend.app.graph.nodes import (
 )
 from backend.app.rag.retriever import Retriever
 from backend.app.schemas.models import MSMEProfile
+
+_logger = logging.getLogger(__name__)
+
+
+def _init_langsmith() -> None:
+    """Log LangSmith tracing status at startup. Never raises."""
+    try:
+        if (
+            os.environ.get("LANGCHAIN_TRACING_V2") == "true"
+            and os.environ.get("LANGSMITH_API_KEY")
+        ):
+            _logger.info("LangSmith tracing enabled (project: msme-financial-health-card)")
+        else:
+            _logger.debug("LangSmith tracing disabled")
+    except Exception as exc:  # noqa: BLE001
+        _logger.warning("LangSmith init check failed (non-blocking): %s", exc)
+
+
+_init_langsmith()
 
 
 def _build_graph() -> StateGraph:
