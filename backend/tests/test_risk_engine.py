@@ -2,7 +2,12 @@ import pytest
 import copy
 from backend.app.schemas.models import WeightVector
 from backend.app.data.personas import PERSONAS
-from backend.app.graph.risk_engine import compute_cfcr, compute_health_score, compute_risk
+from backend.app.graph.risk_engine import (
+    compute_cfcr,
+    compute_health_score,
+    compute_risk,
+    compute_tail_risk,
+)
 
 
 def test_cfcr_baseline_above_one_for_healthy():
@@ -178,3 +183,35 @@ def test_cash_flow_volatility_is_one_when_mean_net_flow_non_positive():
 
     result = compute_risk(stressed, weights, scenarios=[])
     assert result["cash_flow_volatility"] == 1.0
+
+
+def test_tail_risk_is_reproducible_and_bounded():
+    profile = PERSONAS["healthy"]
+    original = copy.deepcopy(profile)
+
+    first = compute_tail_risk(profile, simulations=2000, seed=42)
+    second = compute_tail_risk(profile, simulations=2000, seed=42)
+
+    assert first == second
+    assert 0.0 <= first.probability_cfcr_below_one <= 1.0
+    assert first.cfcr_p05 >= 0.0
+    assert 0.0 <= first.expected_shortfall <= 1.0
+    assert first.simulations == 2000
+    assert first.model_version == "borrower_cashflow_v1"
+    assert first.assumptions
+    assert profile == original
+
+
+def test_tail_risk_worsens_when_inflows_are_materially_weakened():
+    healthy = PERSONAS["healthy"]
+    weakened = copy.deepcopy(healthy)
+    weakened.upi.monthly_inflow_series = [
+        inflow * 0.55 for inflow in weakened.upi.monthly_inflow_series
+    ]
+
+    healthy_tail = compute_tail_risk(healthy, simulations=3000, seed=7)
+    weakened_tail = compute_tail_risk(weakened, simulations=3000, seed=7)
+
+    assert weakened_tail.probability_cfcr_below_one >= healthy_tail.probability_cfcr_below_one
+    assert weakened_tail.cfcr_p05 < healthy_tail.cfcr_p05
+    assert weakened_tail.expected_shortfall >= healthy_tail.expected_shortfall

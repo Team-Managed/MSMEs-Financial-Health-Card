@@ -67,6 +67,7 @@ def _build_response(state: dict) -> AnalysisResponse:
         weight_rationale=state.get("weight_rationale", []),
         baseline_score=risk["baseline_score"],
         stress_results=risk["stress_results"],
+        tail_risk=risk["tail_risk"],
         narrative=state.get("narrative", ""),
         grounding_trace=state.get("grounding_trace", []),
     )
@@ -88,6 +89,13 @@ def analyze(persona_id: str):
 def analyze_custom(req: CustomAnalyzeRequest):
     """Run the full pipeline for a user-provided profile instead of a hardcoded persona."""
     import random
+    proposed_monthly_interest = (
+        req.requested_amount_lakh
+        * 100_000
+        * (req.expected_utilization_pct / 100)
+        * (req.annual_interest_rate_pct / 100)
+        / 12
+    )
     profile = generate_profile(
         seed=random.randint(1, 999_999),
         sector=req.sector,
@@ -95,10 +103,26 @@ def analyze_custom(req: CustomAnalyzeRequest):
         years_operating=req.years_operating,
         msme_tier=req.msme_tier,
         employee_tier=req.employee_tier,
+        annual_turnover=req.annual_turnover_lakh * 100_000,
+        avg_monthly_inflow=req.avg_monthly_inflow_lakh * 100_000,
+        avg_monthly_operating_outflow=req.avg_monthly_operating_outflow_lakh * 100_000,
+        avg_account_balance=req.avg_bank_balance_lakh * 100_000,
+        existing_monthly_emi=(req.existing_monthly_emi_lakh * 100_000) + proposed_monthly_interest,
+        top_counterparty_share=req.top_buyer_share_pct / 100,
+        bounced_payments_12mo=req.bounced_payments_12mo,
+        filing_consistency_score=req.gst_filing_consistency_pct / 100,
+        yoy_growth_rate=req.yoy_growth_pct / 100,
     )
     try:
         state = run_pipeline_with_profile(profile, retriever=_retriever)
     except Exception as exc:
         logger.exception("Pipeline failed for custom profile (sector=%s type=%s)", req.sector, req.profile_type)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    return _build_response(state)
+    response = _build_response(state)
+    response.profile_summary.update({
+        "requested_amount_lakh": req.requested_amount_lakh,
+        "facility_type": "Cash Credit",
+        "tenure_months": 12,
+        "proposed_monthly_interest": round(proposed_monthly_interest, 2),
+    })
+    return response

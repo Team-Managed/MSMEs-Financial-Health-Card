@@ -1,7 +1,7 @@
 from __future__ import annotations
 import math
 from typing import Literal
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class GSTData(BaseModel):
@@ -84,6 +84,15 @@ class StressResult(BaseModel):
     key_drivers: list[str]
 
 
+class TailRiskResult(BaseModel):
+    probability_cfcr_below_one: float
+    cfcr_p05: float
+    expected_shortfall: float
+    simulations: int
+    model_version: str
+    assumptions: list[str]
+
+
 class GroundingCheck(BaseModel):
     claim: str
     type: Literal["numeric", "citation"]
@@ -93,11 +102,23 @@ class GroundingCheck(BaseModel):
 
 class CustomAnalyzeRequest(BaseModel):
     sector: str
-    years_operating: int
+    years_operating: int = Field(ge=1, le=99)
     profile_type: Literal["healthy", "ntc", "buyer_concentrated", "seasonal"]
     msme_tier: Literal["micro", "small", "medium"] = "micro"
     gst_registered: bool = True
     employee_tier: Literal["micro", "small", "medium"] = "micro"
+    requested_amount_lakh: float = Field(default=10.0, ge=1.0, le=25.0)
+    annual_interest_rate_pct: float = Field(default=12.0, gt=0.0, le=40.0)
+    expected_utilization_pct: float = Field(default=75.0, ge=0.0, le=100.0)
+    annual_turnover_lakh: float = Field(default=24.0, gt=0.0)
+    avg_monthly_inflow_lakh: float = Field(default=1.6, gt=0.0)
+    avg_monthly_operating_outflow_lakh: float = Field(default=1.2, ge=0.0)
+    avg_bank_balance_lakh: float = Field(default=1.5, ge=0.0)
+    existing_monthly_emi_lakh: float = Field(default=0.2, ge=0.0)
+    top_buyer_share_pct: float = Field(default=20.0, ge=0.0, le=100.0)
+    bounced_payments_12mo: int = Field(default=0, ge=0, le=100)
+    gst_filing_consistency_pct: float = Field(default=95.0, ge=0.0, le=100.0)
+    yoy_growth_pct: float = Field(default=12.0, ge=-100.0, le=500.0)
 
 
 class AnalysisResponse(BaseModel):
@@ -108,5 +129,6 @@ class AnalysisResponse(BaseModel):
     weight_rationale: list[WeightRationaleItem]
     baseline_score: float
     stress_results: list[StressResult]
+    tail_risk: TailRiskResult
     narrative: str
     grounding_trace: list[GroundingCheck]

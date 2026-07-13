@@ -2,7 +2,7 @@ import math
 import pytest
 from pydantic import ValidationError
 from backend.app.schemas.models import (
-    MSMEProfile, WeightVector, CFCRResult, AnalysisResponse
+    MSMEProfile, WeightVector, CFCRResult, TailRiskResult, AnalysisResponse
 )
 
 def test_msme_profile_valid():
@@ -47,6 +47,14 @@ def test_analysis_response_shape():
         weight_rationale=[],
         baseline_score=72.0,
         stress_results=[],
+        tail_risk=TailRiskResult(
+            probability_cfcr_below_one=0.1,
+            cfcr_p05=0.9,
+            expected_shortfall=0.08,
+            simulations=5000,
+            model_version="borrower_cashflow_v1",
+            assumptions=["Sensitivity estimate"],
+        ),
         narrative="Test narrative",
         grounding_trace=[]
     )

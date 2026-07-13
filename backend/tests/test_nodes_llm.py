@@ -26,7 +26,7 @@ def _make_state():
     }
 
 
-@patch("backend.app.graph.nodes.genai")
+@patch("backend.app.graph.nodes._get_gemini_model")
 def test_explainer_returns_narrative(mock_genai):
     mock_response = MagicMock()
     mock_response.text = '''```json
@@ -35,7 +35,7 @@ def test_explainer_returns_narrative(mock_genai):
     {"source_field": "__explainer_chunks__", "value": "c001", "text": "Guidance supports the risk.", "type": "citation"}
     ]}
     ```'''
-    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    mock_genai.return_value.generate_content.return_value = mock_response
     state = _make_state()
     result = node_explainer(state)
     assert "narrative" in result
@@ -103,7 +103,27 @@ def test_grounding_validator_renders_real_number_from_source_value():
     checks = result["grounding_trace"]
     fails = [c for c in checks if c.status == "fail"]
     assert len(fails) == 0
-    assert result["narrative"] == f"Verified risk metric cfcr_baseline: {cfcr:.4f}."
+    assert result["narrative"] == f"Baseline CFCR is {cfcr:.4f}."
+
+
+def test_grounding_validator_resolves_scenario_keyed_cfcr_path():
+    state = _make_state()
+    scenario = "revenue_drop_20pct"
+    cfcr = next(
+        item.cfcr for item in state["risk_output"]["cfcr_by_scenario"]
+        if item.scenario == scenario
+    )
+    state["claims"] = [{
+        "source_field": f"cfcr_by_scenario[{scenario}].cfcr",
+        "value": cfcr,
+        "text": f"Revenue drop CFCR is {cfcr}.",
+        "type": "numeric",
+    }]
+
+    result = node_grounding_validator(state)
+
+    assert all(check.status == "pass" for check in result["grounding_trace"])
+    assert result["narrative"] == f"Revenue drop 20pct CFCR is {cfcr:.4f}."
 
 
 def test_grounding_validator_rejects_numeric_claim_with_wrong_source_value():
@@ -166,7 +186,7 @@ def test_grounding_validator_excludes_undeclared_narrative_content():
     assert "99.99" not in result["narrative"]
     assert "fabricated-999" not in result["narrative"]
     assert f"{cfcr:.4f}" in result["narrative"]
-    assert "[c001]" in result["narrative"]
+    assert "c001" not in result["narrative"]
     assert all(check.status == "pass" for check in result["grounding_trace"])
 
 
@@ -198,20 +218,20 @@ def test_grounding_validator_deterministically_renders_valid_claims_and_strips_a
 
     assert "12345.67" not in result["narrative"]
     assert "madeup-777" not in result["narrative"]
-    assert f"Verified risk metric cfcr_baseline: {cfcr:.4f}." in result["narrative"]
-    assert "Validated guidance reference [c001]." in result["narrative"]
+    assert f"Baseline CFCR is {cfcr:.4f}." in result["narrative"]
+    assert "c001" not in result["narrative"]
     assert result["claims"] == [
         {
             "type": "numeric",
             "source_field": "cfcr_baseline",
             "value": float(cfcr),
-            "text": f"Verified risk metric cfcr_baseline: {cfcr:.4f}.",
+            "text": f"Baseline CFCR is {cfcr:.4f}.",
         },
         {
             "type": "citation",
             "source_field": "__explainer_chunks__",
             "value": "c001",
-            "text": "Validated guidance reference [c001].",
+            "text": "Retrieved guidance citation validated.",
         },
     ]
     assert all(check.status == "pass" for check in result["grounding_trace"])
@@ -231,7 +251,7 @@ def test_safe_summary_contains_only_deterministic_risk_values():
         "explainer_chunks": [],
     })
     assert "Limited-confidence deterministic summary" not in validation["narrative"]
-    assert "Verified risk metric cfcr_baseline" in validation["narrative"]
-    assert "Verified risk metric baseline_score" in validation["narrative"]
+    assert "Baseline CFCR" in validation["narrative"]
+    assert "Baseline Financial Health Score" in validation["narrative"]
     assert "[" not in validation["narrative"]
     assert all(check.status == "pass" for check in validation["grounding_trace"])

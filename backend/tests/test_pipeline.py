@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 from backend.app.graph.pipeline import run_pipeline
 
 
-@patch("backend.app.graph.nodes.genai")
+@patch("backend.app.graph.nodes._get_gemini_model")
 @patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"})
 def test_pipeline_end_to_end(mock_genai, tmp_path):
     """Full pipeline run with mocked LLM calls."""
@@ -12,7 +12,7 @@ def test_pipeline_end_to_end(mock_genai, tmp_path):
     weight_resp.text = '{"weights": {"gst": 0.30, "upi": 0.30, "aa": 0.25, "epfo": 0.15}, "rationale": [{"dimension": "gst", "reasoning": "ok", "cited_chunk_id": ""}, {"dimension": "upi", "reasoning": "ok", "cited_chunk_id": ""}, {"dimension": "aa", "reasoning": "ok", "cited_chunk_id": ""}, {"dimension": "epfo", "reasoning": "ok", "cited_chunk_id": ""}]}'
     explain_resp = MagicMock()
     explain_resp.text = "CFCR baseline 1.20 is solid. Buyer_loss scenario cuts CFCR. Score 72.00."
-    mock_genai.GenerativeModel.return_value.generate_content.side_effect = [
+    mock_genai.return_value.generate_content.side_effect = [
         weight_resp, explain_resp
     ]
 

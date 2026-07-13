@@ -18,6 +18,15 @@ def generate_profile(
     years_operating: int = 5,
     msme_tier: str = "micro",
     employee_tier: str = "micro",
+    annual_turnover: float | None = None,
+    avg_monthly_inflow: float | None = None,
+    avg_monthly_operating_outflow: float | None = None,
+    avg_account_balance: float | None = None,
+    existing_monthly_emi: float | None = None,
+    top_counterparty_share: float | None = None,
+    bounced_payments_12mo: int | None = None,
+    filing_consistency_score: float | None = None,
+    yoy_growth_rate: float | None = None,
 ) -> MSMEProfile:
     rng = np.random.default_rng(seed)
 
@@ -93,6 +102,23 @@ def generate_profile(
     avg_balance *= scale
     emi_total *= scale
 
+    if annual_turnover is not None:
+        base_turnover = annual_turnover / 12
+    if avg_monthly_inflow is not None:
+        inflow_base = avg_monthly_inflow
+    if avg_account_balance is not None:
+        avg_balance = avg_account_balance
+    if existing_monthly_emi is not None:
+        emi_total = existing_monthly_emi
+    if top_counterparty_share is not None:
+        top_share = top_counterparty_share
+    if bounced_payments_12mo is not None:
+        bounce_count = bounced_payments_12mo
+    if filing_consistency_score is not None:
+        filing_score = filing_consistency_score
+    if yoy_growth_rate is not None:
+        growth = yoy_growth_rate
+
     # Override employee base from employee_tier if provided
     employee_base = emp_base
 
@@ -102,7 +128,12 @@ def generate_profile(
     turnover = [round(float(base_turnover * (1 + growth * m / 12) * noise[m]), 2)
                 for m in range(12)]
     inflows = [round(float(inflow_base * noise[m]), 2) for m in range(12)]
-    outflows = [round(float(inflow_base * 0.75 * noise[m]), 2) for m in range(12)]
+    outflow_base = (
+        avg_monthly_operating_outflow
+        if avg_monthly_operating_outflow is not None
+        else inflow_base * 0.75
+    )
+    outflows = [round(float(outflow_base * noise[m]), 2) for m in range(12)]
     employees = [max(1, int(employee_base + rng.integers(-2, 3))) for _ in range(12)]
     operating_outflow = round(float(np.mean(outflows)), 2)
 

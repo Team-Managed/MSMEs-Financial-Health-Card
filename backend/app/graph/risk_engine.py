@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import numpy as np
 from backend.app.schemas.models import (
-    MSMEProfile, WeightVector, CFCRResult, StressResult
+    MSMEProfile, WeightVector, CFCRResult, StressResult, TailRiskResult
 )
 
 # ── CFCR ──────────────────────────────────────────────────────────────────────
@@ -41,6 +41,69 @@ def compute_cfcr(
     liquid_buffer = avg_balance + _near_term_receivables(upi_inflows)
     net_outflow = max(emi_total + operating_outflow, 1.0)
     return round(liquid_buffer / net_outflow, 4)
+
+
+def compute_tail_risk(
+    profile: MSMEProfile,
+    simulations: int = 5000,
+    seed: int = 2026,
+) -> TailRiskResult:
+    """Estimate borrower CFCR tail risk from disclosed cash-flow shocks.
+
+    This is an exploratory sensitivity distribution, not a calibrated default
+    probability. Paired historical months are resampled to retain the observed
+    relationship between inflows and operating outflows.
+    """
+    if simulations < 100:
+        raise ValueError("simulations must be at least 100")
+
+    inflows = np.asarray(profile.upi.monthly_inflow_series, dtype=float)
+    outflows = np.asarray(profile.upi.monthly_outflow_series, dtype=float)
+    paired_months = min(len(inflows), len(outflows))
+    if paired_months == 0:
+        raise ValueError("tail risk requires paired monthly inflow and outflow history")
+
+    inflows = inflows[:paired_months]
+    outflows = outflows[:paired_months]
+    rng = np.random.default_rng(seed)
+    sampled_months = rng.integers(0, paired_months, size=(simulations, 3))
+
+    sampled_inflows = inflows[sampled_months]
+    sampled_outflows = outflows[sampled_months]
+
+    collection_shock = np.clip(rng.normal(0.90, 0.10, size=(simulations, 1)), 0.55, 1.10)
+    cost_shock = np.clip(rng.normal(1.05, 0.08, size=(simulations, 1)), 0.90, 1.35)
+    debt_shock = np.clip(rng.normal(1.05, 0.05, size=simulations), 1.00, 1.25)
+
+    stressed_inflows = sampled_inflows * collection_shock
+    stressed_outflows = sampled_outflows * cost_shock
+    receivables = np.mean(stressed_inflows, axis=1) * 0.8
+    operating_outflow = np.mean(stressed_outflows, axis=1)
+    debt_service = profile.aa_bank_data.existing_loan_emi_total * debt_shock
+    denominator = np.maximum(operating_outflow + debt_service, 1.0)
+    simulated_cfcr = (profile.aa_bank_data.avg_account_balance + receivables) / denominator
+
+    failure_mask = simulated_cfcr < 1.0
+    expected_shortfall = (
+        float(np.mean(1.0 - simulated_cfcr[failure_mask]))
+        if np.any(failure_mask)
+        else 0.0
+    )
+
+    return TailRiskResult(
+        probability_cfcr_below_one=round(float(np.mean(failure_mask)), 4),
+        cfcr_p05=round(float(np.percentile(simulated_cfcr, 5)), 4),
+        expected_shortfall=round(expected_shortfall, 4),
+        simulations=simulations,
+        model_version="borrower_cashflow_v1",
+        assumptions=[
+            "Paired observed months are resampled over a three-month horizon",
+            "Collections average 10% below observed values with bounded variation",
+            "Operating outflows average 5% above observed values with bounded variation",
+            "Debt service may rise up to 25% and existing liquid balance is held constant",
+            "Results are sensitivity estimates, not calibrated default probabilities",
+        ],
+    )
 
 
 # ── Financial Health Score ────────────────────────────────────────────────────
@@ -238,6 +301,7 @@ def compute_risk(profile: MSMEProfile, weights: WeightVector, scenarios: list[st
         "baseline_score": baseline_score,
         "weights_used": weights,
         "stress_results": stress_results,
+        "tail_risk": compute_tail_risk(profile),
         "cash_flow_volatility": round(cv, 4),
         "buyer_concentration_flag": buyer_flag,
     }

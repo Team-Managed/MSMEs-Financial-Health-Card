@@ -8,6 +8,9 @@ import json
 import logging
 import os
 import re
+import urllib.error
+import urllib.request
+from types import SimpleNamespace
 from typing import Any
 
 import google.generativeai as genai
@@ -66,23 +69,37 @@ def _to_plain_data(value: Any) -> Any:
 def _resolve_source_field(data: Any, source_field: str) -> Any:
     current = data
     for part in source_field.split("."):
-        match = re.fullmatch(r"([a-zA-Z_][a-zA-Z0-9_]*)(?:\[(\d+)\])?", part)
+        match = re.fullmatch(
+            r"([a-zA-Z_][a-zA-Z0-9_]*)(?:\[([a-zA-Z0-9_]+)\])?",
+            part,
+        )
         if not match:
             raise KeyError(f"Invalid source_field segment: {part!r}")
         key = match.group(1)
-        idx = match.group(2)
+        selector = match.group(2)
 
         if not isinstance(current, dict) or key not in current:
             raise KeyError(f"Unknown source_field key: {key!r}")
         current = current[key]
 
-        if idx is not None:
+        if selector is not None:
             if not isinstance(current, list):
                 raise KeyError(f"source_field index used on non-list key: {key!r}")
-            i = int(idx)
-            if i < 0 or i >= len(current):
-                raise KeyError(f"source_field index out of range: {source_field!r}")
-            current = current[i]
+            if selector.isdigit():
+                index = int(selector)
+                if index >= len(current):
+                    raise KeyError(f"source_field index out of range: {source_field!r}")
+                current = current[index]
+            else:
+                current = next(
+                    (
+                        item for item in current
+                        if isinstance(item, dict) and item.get("scenario") == selector
+                    ),
+                    None,
+                )
+                if current is None:
+                    raise KeyError(f"Unknown source_field scenario: {selector!r}")
     return current
 
 
@@ -215,7 +232,7 @@ def _render_validated_claims(
                 continue
 
             value = float(resolved)
-            text = f"Verified risk metric {claim['source_field']}: {value:.4f}."
+            text = _render_numeric_fact(claim["source_field"], value)
             rendered_claims.append({
                 "type": "numeric",
                 "source_field": claim["source_field"],
@@ -226,18 +243,43 @@ def _render_validated_claims(
             continue
 
         citation_id = claim["value"]
-        text = f"Validated guidance reference [{citation_id}]."
+        text = "Retrieved guidance citation validated."
         rendered_claims.append({
             "type": "citation",
             "source_field": _EXPLAINER_CHUNKS_SOURCE,
             "value": citation_id,
             "text": text,
         })
-        narrative_lines.append(text)
 
     if not rendered_claims:
         return None
     return " ".join(narrative_lines), rendered_claims
+
+
+def _render_numeric_fact(source_field: str, value: float) -> str:
+    labels = {
+        "cfcr_baseline": f"Baseline CFCR is {value:.4f}.",
+        "baseline_score": f"Baseline Financial Health Score is {value:.2f}/100.",
+        "cash_flow_volatility": f"Cash-flow volatility is {value:.4f}.",
+    }
+    if source_field in labels:
+        return labels[source_field]
+
+    scenario_match = re.fullmatch(
+        r"(cfcr_by_scenario|stress_results)\[([a-zA-Z0-9_]+)\]\.(cfcr|delta|stressed_score)",
+        source_field,
+    )
+    if scenario_match:
+        collection, scenario, metric = scenario_match.groups()
+        scenario_label = scenario.replace("_", " ").capitalize()
+        if collection == "cfcr_by_scenario" and metric == "cfcr":
+            return f"{scenario_label} CFCR is {value:.4f}."
+        if metric == "delta":
+            return f"{scenario_label} changes the Financial Health Score by {value:+.2f} points."
+        if metric == "stressed_score":
+            return f"{scenario_label} Financial Health Score is {value:.2f}/100."
+
+    return f"Validated risk metric is {value:.4f}."
 
 
 def _build_safe_summary_from_risk(risk_output: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -261,7 +303,7 @@ def _build_safe_summary_from_risk(risk_output: dict[str, Any]) -> tuple[str, lis
     if worst_index is None:
         worst_source = "cfcr_baseline"
     else:
-        worst_source = f"cfcr_by_scenario[{worst_index}].cfcr"
+        worst_source = f"cfcr_by_scenario[{worst_scenario}].cfcr"
 
     narrative = (
         "Limited-confidence deterministic summary: one or more generated claims failed grounding checks, "
@@ -368,10 +410,64 @@ def _validate_rationale(
     return result
 
 
-def _get_gemini_model() -> genai.GenerativeModel:
+class _OpenAICompatibleModel:
+    def __init__(self, api_key: str, base_url: str, model: str):
+        self._api_key = api_key
+        self._endpoint = f"{base_url.rstrip('/')}/chat/completions"
+        self._model = model
+
+    def generate_content(self, prompt: str) -> SimpleNamespace:
+        payload = json.dumps({
+            "model": self._model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }).encode("utf-8")
+        request = urllib.request.Request(
+            self._endpoint,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "idbi-hack-v2/1.0",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"OpenAI-compatible LLM request failed ({exc.code}): {detail[:300]}"
+            ) from exc
+
+        try:
+            text = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("OpenAI-compatible LLM response missing message content") from exc
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("OpenAI-compatible LLM returned empty message content")
+        return SimpleNamespace(text=text)
+
+
+def _get_gemini_model() -> Any:
+    llm_api_key = os.environ.get("LLM_API_KEY")
+    llm_base_url = os.environ.get("LLM_BASE_URL")
+    llm_model = os.environ.get("LLM_MODEL")
+    configured = [llm_api_key, llm_base_url, llm_model]
+    if any(configured):
+        if not all(configured):
+            raise RuntimeError(
+                "LLM_API_KEY, LLM_BASE_URL, and LLM_MODEL must all be set together"
+            )
+        return _OpenAICompatibleModel(llm_api_key, llm_base_url, llm_model)
+
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        raise RuntimeError("GOOGLE_API_KEY environment variable not set")
+        raise RuntimeError(
+            "No LLM configured; set LLM_API_KEY/LLM_BASE_URL/LLM_MODEL or GOOGLE_API_KEY"
+        )
     genai.configure(api_key=api_key)
     return genai.GenerativeModel("gemini-2.5-flash")
 
@@ -547,6 +643,7 @@ Write the Financial Health Card narrative (3–5 short paragraphs):
 
 Rules:
 - Every numeric claim must include a source_field that points to a key/path in Risk Engine output.
+- Use the exact source_field shown beside each supplied number; never infer list indexes or fields.
 - Every citation claim must include the cited retrieved chunk_id as value.
 - Do not invent chunk IDs.
 
@@ -555,7 +652,7 @@ Respond with STRICT JSON ONLY (no markdown, no extra text):
     "narrative": "<3-5 short paragraphs>",
     "claims": [
         {{"source_field": "cfcr_baseline", "value": 1.2345, "text": "Baseline CFCR is 1.2345.", "type": "numeric"}},
-        {{"source_field": "stress_results[0].delta", "value": -8.2, "text": "Receivable delay reduces score by 8.2 points.", "type": "numeric"}},
+        {{"source_field": "cfcr_by_scenario[receivable_delay_60d].cfcr", "value": 1.1023, "text": "Receivable delay CFCR is 1.1023.", "type": "numeric"}},
         {{"source_field": "__explainer_chunks__", "value": "chunk_abc123", "text": "Concentration risk is material.", "type": "citation"}}
     ]
 }}
@@ -569,8 +666,11 @@ def node_explainer(state: dict) -> dict:
     chunks: list[dict] = state.get("explainer_chunks", [])
 
     stress_table = "\n".join(
-        f"  {r.scenario}: score {r.stressed_score}/100 (delta {r.delta:+.1f}), "
-        f"CFCR {next((c.cfcr for c in risk['cfcr_by_scenario'] if c.scenario == r.scenario), 'N/A')}"
+        f"  {r.scenario}: score {r.stressed_score}/100 "
+        f"[stress_results[{r.scenario}].stressed_score], "
+        f"delta {r.delta:+.1f} [stress_results[{r.scenario}].delta], "
+        f"CFCR {next((c.cfcr for c in risk['cfcr_by_scenario'] if c.scenario == r.scenario), 'N/A')} "
+        f"[cfcr_by_scenario[{r.scenario}].cfcr]"
         for r in risk["stress_results"]
     )
     chunks_text = "\n".join(
