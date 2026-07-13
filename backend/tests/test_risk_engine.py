@@ -1,4 +1,5 @@
 import pytest
+import copy
 from backend.app.schemas.models import WeightVector
 from backend.app.data.personas import PERSONAS
 from backend.app.graph.risk_engine import compute_cfcr, compute_health_score, compute_risk
@@ -166,3 +167,14 @@ def test_original_profile_unmodified_after_stress():
             f"EMI mutated for {name}"
         assert profile.gst.yoy_growth_rate == orig_gst_growth, \
             f"GST growth rate mutated for {name}"
+
+
+def test_cash_flow_volatility_is_one_when_mean_net_flow_non_positive():
+    """Reported CV should reflect distress when mean net UPI flow is non-positive."""
+    weights = WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15)
+    stressed = copy.deepcopy(PERSONAS["healthy"])
+    stressed.upi.monthly_inflow_series = [1000.0] * 12
+    stressed.upi.monthly_outflow_series = [1500.0] * 12
+
+    result = compute_risk(stressed, weights, scenarios=[])
+    assert result["cash_flow_volatility"] == 1.0

@@ -202,7 +202,7 @@ def compute_risk(profile: MSMEProfile, weights: WeightVector, scenarios: list[st
         profile.upi.monthly_inflow_series, profile.upi.monthly_outflow_series
     )]
     mean_net = float(np.mean(net_flows))
-    cv = float(np.std(net_flows) / mean_net) if mean_net > 0 else 0.0
+    cv = float(np.std(net_flows) / mean_net) if mean_net > 0 else 1.0
 
     # Buyer concentration flag
     buyer_flag = profile.upi.top_counterparty_share >= 0.40

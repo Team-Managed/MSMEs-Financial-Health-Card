@@ -346,7 +346,24 @@ def _validate_rationale(
                 )
                 return None
         else:
-            # cited_chunk_id == "default" — already canonical
+            # cited_chunk_id == "default"
+            # If retrieved guidance exists, require explicit no-guidance wording
+            # to avoid silently treating an unsupported rationale as canonical.
+            lower = item.reasoning.lower()
+            if retrieved_chunk_ids and not any(phrase in lower for phrase in _NO_GUIDANCE_PHRASES):
+                logger.warning(
+                    "cited_chunk_id='default' for '%s' while retrieved chunks exist "
+                    "without explicit no-guidance/default-used wording — using defaults",
+                    item.dimension,
+                )
+                return None
+            if _CONTRADICTORY_PCT_RE.search(item.reasoning):
+                logger.warning(
+                    "'default' rationale for '%s' contains a hard-coded percentage "
+                    "— rejecting LLM result to avoid misleading mismatch",
+                    item.dimension,
+                )
+                return None
             result.append(item)
     return result
 

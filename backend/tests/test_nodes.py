@@ -278,6 +278,26 @@ def test_weight_setter_rejects_no_guidance_with_hardcoded_pct(mock_genai):
     state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
     result = node_weight_setter(state)
     assert result["weights"] == _DEFAULT_WEIGHTS
+
+
+@patch("backend.app.graph.nodes.genai")
+def test_weight_setter_rejects_default_citation_without_no_guidance_phrase(mock_genai):
+    """When chunks exist, cited_chunk_id='default' needs explicit no-guidance wording."""
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "weights": {"gst": 0.35, "upi": 0.30, "aa": 0.20, "epfo": 0.15},
+        "rationale": [
+            {"dimension": "gst", "reasoning": "Strong GST data supports this choice.", "cited_chunk_id": "default"},
+            {"dimension": "upi", "reasoning": "no retrieved guidance — default used", "cited_chunk_id": ""},
+            {"dimension": "aa", "reasoning": "no retrieved guidance — default used", "cited_chunk_id": ""},
+            {"dimension": "epfo", "reasoning": "no retrieved guidance — default used", "cited_chunk_id": ""},
+        ],
+    })
+    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
+    result = node_weight_setter(state)
+    assert result["weights"] == _DEFAULT_WEIGHTS
+    assert result["weight_rationale"] == _DEFAULT_RATIONALE
     assert result["weight_rationale"] == _DEFAULT_RATIONALE
 
 
