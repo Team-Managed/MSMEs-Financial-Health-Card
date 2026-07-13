@@ -31,7 +31,7 @@ def test_msme_profile_valid():
 
 def test_weight_vector_must_be_floats():
     wv = WeightVector(gst=0.3, upi=0.3, aa=0.25, epfo=0.15)
-    assert abs(wv.gst + wv.upi + wv.aa + wv.epfo - 1.0) < 0.01
+    assert abs(wv.gst + wv.upi + wv.aa + wv.epfo - 1.0) < 1e-6
 
 def test_cfcr_pass_when_gte_one():
     r = CFCRResult(scenario="baseline", cfcr=1.25, pass_fail=True)

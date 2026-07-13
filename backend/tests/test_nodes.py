@@ -50,25 +50,26 @@ def test_risk_engine_node_produces_cfcr():
 
 @patch("backend.app.graph.nodes.genai")
 def test_weight_setter_returns_weight_vector(mock_genai):
-    """Mock the Gemini call so the test doesn't need a real API key."""
+    """LLM path is exercised when chunks are provided; mock must be called."""
     mock_response = MagicMock()
-    mock_response.text = """{
+    mock_response.text = json.dumps({
         "weights": {"gst": 0.30, "upi": 0.30, "aa": 0.25, "epfo": 0.15},
         "rationale": [
-            {"dimension": "gst", "reasoning": "GST data strong.", "cited_chunk_id": ""},
-            {"dimension": "upi", "reasoning": "UPI reliable.", "cited_chunk_id": ""},
-            {"dimension": "aa", "reasoning": "Good repayment.", "cited_chunk_id": ""},
-            {"dimension": "epfo", "reasoning": "Stable payroll.", "cited_chunk_id": ""}
-        ]
-    }"""
+            {"dimension": "gst", "reasoning": "Sector guidance.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "upi", "reasoning": "UPI data.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "aa", "reasoning": "Repayment record.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "epfo", "reasoning": "Payroll stability.", "cited_chunk_id": "chunk-001"},
+        ],
+    })
     mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
     state = {
         "profile": PERSONAS["healthy"],
-        "retrieved_chunks": [],
+        "retrieved_chunks": _FAKE_CHUNKS,
     }
     result = node_weight_setter(state)
     assert "weights" in result
     assert isinstance(result["weights"], WeightVector)
+    mock_genai.GenerativeModel.return_value.generate_content.assert_called_once()
 
 
 # ── Weight/rationale integrity tests ─────────────────────────────────────────
@@ -144,8 +145,8 @@ def test_weight_setter_rejects_fabricated_chunk_id(mock_genai):
 
 
 @patch("backend.app.graph.nodes.genai")
-def test_weight_setter_normalizes_empty_citation_without_default_phrase(mock_genai):
-    """Empty cited_chunk_id without explicit default/no-guidance phrase → normalize to default rationale."""
+def test_weight_setter_rejects_empty_citation_without_default_phrase(mock_genai):
+    """Empty cited_chunk_id without explicit default/no-guidance phrase → full fallback to prevent rationale/weight mismatch."""
     mock_response = MagicMock()
     mock_response.text = json.dumps({
         "weights": {"gst": 0.30, "upi": 0.30, "aa": 0.25, "epfo": 0.15},
@@ -159,11 +160,73 @@ def test_weight_setter_normalizes_empty_citation_without_default_phrase(mock_gen
     mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
     state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
     result = node_weight_setter(state)
-    # Weights are from LLM (valid sum = 1.0)
-    assert result["weights"] == WeightVector(gst=0.30, upi=0.30, aa=0.25, epfo=0.15)
-    # All rationale items normalized to defaults (cited_chunk_id == "default")
-    for item in result["weight_rationale"]:
-        assert item.cited_chunk_id == "default"
+    # Entire LLM result rejected; must return documented defaults
+    assert result["weights"] == _DEFAULT_WEIGHTS
+    assert result["weight_rationale"] == _DEFAULT_RATIONALE
+
+
+@patch("backend.app.graph.nodes.genai")
+def test_weight_setter_falls_back_on_bad_sum_weights(mock_genai):
+    """LLM weights that don't sum to 1.0 → WeightVector validation raises → full fallback."""
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "weights": {"gst": 0.40, "upi": 0.40, "aa": 0.10, "epfo": 0.20},  # sum=1.10
+        "rationale": [
+            {"dimension": "gst", "reasoning": "Strong GST.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "upi", "reasoning": "UPI reliable.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "aa", "reasoning": "Repayment ok.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "epfo", "reasoning": "Payroll stable.", "cited_chunk_id": "chunk-001"},
+        ],
+    })
+    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
+    result = node_weight_setter(state)
+    assert result["weights"] == _DEFAULT_WEIGHTS
+    assert result["weight_rationale"] == _DEFAULT_RATIONALE
+
+
+@patch("backend.app.graph.nodes.genai")
+def test_weight_setter_falls_back_on_out_of_range_weight(mock_genai):
+    """LLM weight outside [0, 1] → WeightVector validation raises → full fallback."""
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "weights": {"gst": -0.10, "upi": 0.50, "aa": 0.35, "epfo": 0.25},
+        "rationale": [
+            {"dimension": "gst", "reasoning": "Negative GST.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "upi", "reasoning": "UPI ok.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "aa", "reasoning": "Repayment ok.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "epfo", "reasoning": "Payroll stable.", "cited_chunk_id": "chunk-001"},
+        ],
+    })
+    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
+    result = node_weight_setter(state)
+    assert result["weights"] == _DEFAULT_WEIGHTS
+    assert result["weight_rationale"] == _DEFAULT_RATIONALE
+
+
+@patch("backend.app.graph.nodes.genai")
+def test_weight_setter_rejects_no_guidance_with_hardcoded_pct(mock_genai):
+    """No-guidance rationale item that also contains a hard-coded percentage → full fallback.
+
+    The wording "no retrieved guidance — default used, 30%" is misleading when
+    the LLM chose a different weight, so the entire result must be rejected.
+    """
+    mock_response = MagicMock()
+    mock_response.text = json.dumps({
+        "weights": {"gst": 0.35, "upi": 0.30, "aa": 0.20, "epfo": 0.15},
+        "rationale": [
+            {"dimension": "gst", "reasoning": "Sector guidance at 35%.", "cited_chunk_id": "chunk-001"},
+            {"dimension": "upi", "reasoning": "no retrieved guidance — default used, 30%.", "cited_chunk_id": ""},
+            {"dimension": "aa", "reasoning": "no retrieved guidance — default used", "cited_chunk_id": ""},
+            {"dimension": "epfo", "reasoning": "no retrieved guidance — default used", "cited_chunk_id": ""},
+        ],
+    })
+    mock_genai.GenerativeModel.return_value.generate_content.return_value = mock_response
+    state = {"profile": PERSONAS["healthy"], "retrieved_chunks": _FAKE_CHUNKS}
+    result = node_weight_setter(state)
+    assert result["weights"] == _DEFAULT_WEIGHTS
+    assert result["weight_rationale"] == _DEFAULT_RATIONALE
 
 
 @patch("backend.app.graph.nodes.genai")

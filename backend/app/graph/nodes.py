@@ -33,20 +33,24 @@ _DEFAULT_RATIONALE_MAP: dict[str, WeightRationaleItem] = {
 }
 _REQUIRED_DIMS: frozenset[str] = frozenset({"gst", "upi", "aa", "epfo"})
 _NO_GUIDANCE_PHRASES = ("no retrieved guidance", "default used")
+# Matches any hard-coded percentage literal (e.g. "30%", "25 %") in rationale text.
+_CONTRADICTORY_PCT_RE = re.compile(r"\d+\s*%")
 
 
 def _validate_rationale(
     rationale: list[WeightRationaleItem],
     retrieved_chunk_ids: set[str],
 ) -> list[WeightRationaleItem] | None:
-    """Validate/normalize LLM-produced rationale against the retrieved chunk set.
+    """Validate LLM-produced rationale against the retrieved chunk set.
 
-    Returns a validated (possibly normalized) list, or None to signal full
-    fallback to documented defaults.  Rules:
+    Returns a validated list, or None to signal full fallback to documented
+    defaults (fail-closed).  Rules:
     - Duplicate or missing dimensions → None
     - Non-empty, non-'default' cited_chunk_id absent from retrieved_chunk_ids → None
     - Empty cited_chunk_id without an explicit "no retrieved guidance / default used"
-      phrase in reasoning → replace that item with the documented default
+      phrase in reasoning → None (reject entire result; avoid rationale/weight mismatch)
+    - Empty cited_chunk_id with the explicit phrase but also a hard-coded percentage
+      literal → None (contradictory wording; reject to prevent misleading output)
     """
     dims = [item.dimension for item in rationale]
     if set(dims) != _REQUIRED_DIMS or len(dims) != len(_REQUIRED_DIMS):
@@ -66,14 +70,24 @@ def _validate_rationale(
         elif not cid:
             lower = item.reasoning.lower()
             if any(phrase in lower for phrase in _NO_GUIDANCE_PHRASES):
+                # Explicit no-guidance phrase is acceptable — but reject if the
+                # wording also contains a hard-coded percentage that could
+                # contradict the actual LLM-chosen weight.
+                if _CONTRADICTORY_PCT_RE.search(item.reasoning):
+                    logger.warning(
+                        "No-guidance rationale for '%s' contains a hard-coded "
+                        "percentage — rejecting LLM result to avoid misleading mismatch",
+                        item.dimension,
+                    )
+                    return None
                 result.append(item)
             else:
                 logger.warning(
                     "Empty cited_chunk_id for '%s' without explicit default/no-guidance "
-                    "phrase — normalizing to documented default",
+                    "phrase — rejecting LLM result to prevent rationale/weight mismatch",
                     item.dimension,
                 )
-                result.append(_DEFAULT_RATIONALE_MAP[item.dimension])
+                return None
         else:
             # cited_chunk_id == "default" — already canonical
             result.append(item)
