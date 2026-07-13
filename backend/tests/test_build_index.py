@@ -39,6 +39,7 @@ def test_chunk_pages_safely_splits_one_overlong_sentence_and_skips_blanks():
 
 def test_chunk_id_and_metadata_are_deterministic_and_versioned():
     checksum = hashlib.sha256(b"pdf-content").hexdigest()
+    source_identity = build_index._normalized_source_identity("source.pdf")
     chunk = build_index.PageChunk(
         text="MSME lending guidance.",
         page_number=3,
@@ -46,12 +47,12 @@ def test_chunk_id_and_metadata_are_deterministic_and_versioned():
         chunk_index=1,
     )
 
-    first = build_index._chunk_id(checksum, chunk)
-    second = build_index._chunk_id(checksum, chunk)
+    first = build_index._chunk_id(checksum, source_identity, chunk)
+    second = build_index._chunk_id(checksum, source_identity, chunk)
     metadata = build_index._chunk_metadata("source.pdf", checksum, chunk)
 
     assert first == second
-    assert first != build_index._chunk_id("different-checksum", chunk)
+    assert first != build_index._chunk_id("different-checksum", source_identity, chunk)
     assert metadata == {
         "source": "source.pdf",
         "page": 3,
@@ -61,6 +62,23 @@ def test_chunk_id_and_metadata_are_deterministic_and_versioned():
         "source_checksum": checksum,
         "source_version": f"sha256:{checksum}",
     }
+
+
+def test_chunk_id_includes_normalized_source_identity():
+    checksum = hashlib.sha256(b"same-bytes").hexdigest()
+    chunk = build_index.PageChunk(
+        text="Same chunk text",
+        page_number=1,
+        section="Page 1",
+        chunk_index=0,
+    )
+
+    id_a = build_index._chunk_id(checksum, build_index._normalized_source_identity("alpha.pdf"), chunk)
+    id_b = build_index._chunk_id(checksum, build_index._normalized_source_identity("beta.pdf"), chunk)
+    id_a_again = build_index._chunk_id(checksum, build_index._normalized_source_identity("alpha.pdf"), chunk)
+
+    assert id_a != id_b
+    assert id_a == id_a_again
 
 
 def test_build_index_recreates_collection_to_remove_stale_records(tmp_path, monkeypatch):
@@ -111,3 +129,36 @@ def test_build_index_recreates_collection_to_remove_stale_records(tmp_path, monk
     assert fake_client.deleted == [build_index.COLLECTION_NAME, build_index.COLLECTION_NAME]
     assert len(fake_client.collection.records) == 1
     assert not first_ids.intersection(fake_client.collection.records)
+
+
+def test_build_index_no_pdfs_still_recreates_empty_collection(tmp_path, monkeypatch):
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+
+    class FakeCollection:
+        def count(self):
+            return 0
+
+    class FakeClient:
+        def __init__(self):
+            self.collection = object()
+            self.deleted = []
+            self.created = []
+
+        def delete_collection(self, name):
+            self.deleted.append(name)
+            self.collection = None
+
+        def create_collection(self, name, embedding_function, metadata):
+            self.created.append((name, metadata.get("hnsw:space")))
+            self.collection = FakeCollection()
+            return self.collection
+
+    fake_client = FakeClient()
+    monkeypatch.setattr(build_index.chromadb, "PersistentClient", lambda path: fake_client)
+
+    build_index.build_index(corpus, tmp_path / "chroma", embedding_function=object())
+
+    assert fake_client.deleted == [build_index.COLLECTION_NAME]
+    assert fake_client.created == [(build_index.COLLECTION_NAME, "cosine")]
+    assert fake_client.collection.count() == 0

@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app.rag.retriever import Retriever
 
 
@@ -87,3 +89,40 @@ def test_retriever_validates_n_results():
             pass
         else:
             raise AssertionError(f"Expected ValueError for n_results={invalid!r}")
+
+
+def test_retriever_validates_constructor_max_distance_range():
+    for invalid in (float("nan"), float("inf"), float("-inf"), -0.01, 2.01):
+        try:
+            Retriever(collection=None, embedding_function=object(), max_distance=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Expected ValueError for max_distance={invalid!r}")
+
+    low = Retriever(collection=None, embedding_function=object(), max_distance=0.0)
+    high = Retriever(collection=None, embedding_function=object(), max_distance=2.0)
+    assert low._max_distance == 0.0
+    assert high._max_distance == 2.0
+
+
+def test_retriever_validates_env_max_distance(monkeypatch):
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "NaN")
+    with pytest.raises(ValueError):
+        Retriever(collection=None, embedding_function=object())
+
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "inf")
+    with pytest.raises(ValueError):
+        Retriever(collection=None, embedding_function=object())
+
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "-1")
+    with pytest.raises(ValueError):
+        Retriever(collection=None, embedding_function=object())
+
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "2.5")
+    with pytest.raises(ValueError):
+        Retriever(collection=None, embedding_function=object())
+
+    monkeypatch.setenv("RAG_MAX_DISTANCE", "2")
+    r = Retriever(collection=None, embedding_function=object())
+    assert r._max_distance == 2.0

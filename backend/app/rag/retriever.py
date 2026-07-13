@@ -4,6 +4,7 @@ Gracefully returns [] if the index does not exist.
 """
 from __future__ import annotations
 import logging
+import math
 import os
 from pathlib import Path
 import chromadb
@@ -14,7 +15,18 @@ logger = logging.getLogger(__name__)
 _COLLECTION_NAME = "rag_corpus_v2"
 _EMBED_MODEL = "all-MiniLM-L6-v2"
 _DEFAULT_CHROMA_DIR = str(Path(__file__).parent / "chroma_store")
-_DEFAULT_MAX_DISTANCE = float(os.environ.get("RAG_MAX_DISTANCE", "0.8"))
+_DEFAULT_MAX_DISTANCE = 0.8
+
+
+def _validate_max_distance(value: float | str, source: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{source} must be a finite number in [0, 2]") from exc
+
+    if not math.isfinite(parsed) or parsed < 0.0 or parsed > 2.0:
+        raise ValueError(f"{source} must be a finite number in [0, 2]")
+    return parsed
 
 
 class Retriever:
@@ -22,11 +34,15 @@ class Retriever:
         self,
         chroma_dir: str = _DEFAULT_CHROMA_DIR,
         collection_name: str = _COLLECTION_NAME,
-        max_distance: float = _DEFAULT_MAX_DISTANCE,
+        max_distance: float | None = None,
         collection=None,
         embedding_function=None,
     ):
-        self._max_distance = float(max_distance)
+        if max_distance is None:
+            raw = os.environ.get("RAG_MAX_DISTANCE", str(_DEFAULT_MAX_DISTANCE))
+            self._max_distance = _validate_max_distance(raw, "RAG_MAX_DISTANCE")
+        else:
+            self._max_distance = _validate_max_distance(max_distance, "max_distance")
         self._collection_name = collection_name
         self._ef = embedding_function or SentenceTransformerEmbeddingFunction(model_name=_EMBED_MODEL)
         self._col = collection

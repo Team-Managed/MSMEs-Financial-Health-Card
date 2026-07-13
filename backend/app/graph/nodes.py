@@ -197,22 +197,47 @@ def _validate_claims(
     return trace, validated
 
 
-def _rewrite_from_validated_claims(validated_claims: list[dict[str, Any]]) -> tuple[str, list[dict[str, Any]]] | None:
-    numeric_claims = [claim for claim in validated_claims if claim["type"] == "numeric"]
-    if not numeric_claims:
+def _render_validated_claims(
+    validated_claims: list[dict[str, Any]],
+    risk_output: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]] | None:
+    """Render claims from validated source data, never from LLM-provided prose."""
+    rendered_claims: list[dict[str, Any]] = []
+    narrative_lines: list[str] = []
+
+    for claim in validated_claims:
+        if claim["type"] == "numeric":
+            try:
+                resolved = _resolve_source_field(risk_output, claim["source_field"])
+            except KeyError:
+                continue
+            if isinstance(resolved, bool) or not isinstance(resolved, (int, float)):
+                continue
+
+            value = float(resolved)
+            text = f"Verified risk metric {claim['source_field']}: {value:.4f}."
+            rendered_claims.append({
+                "type": "numeric",
+                "source_field": claim["source_field"],
+                "value": value,
+                "text": text,
+            })
+            narrative_lines.append(text)
+            continue
+
+        citation_id = claim["value"]
+        text = f"Validated guidance reference [{citation_id}]."
+        rendered_claims.append({
+            "type": "citation",
+            "source_field": _EXPLAINER_CHUNKS_SOURCE,
+            "value": citation_id,
+            "text": text,
+        })
+        narrative_lines.append(text)
+
+    if not rendered_claims:
         return None
-
-    summary_lines = [
-        "Grounding fallback summary: original narrative was replaced after grounding failures."
-    ]
-    for claim in numeric_claims[:4]:
-        summary_lines.append(f"{claim['source_field']} = {claim['value']:.4f}.")
-
-    citation_ids = sorted({claim["value"] for claim in validated_claims if claim["type"] == "citation"})
-    if citation_ids:
-        summary_lines.append("Validated guidance references: " + ", ".join(f"[{cid}]" for cid in citation_ids) + ".")
-
-    return " ".join(summary_lines), validated_claims
+    return " ".join(narrative_lines), rendered_claims
 
 
 def _build_safe_summary_from_risk(risk_output: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
@@ -568,7 +593,6 @@ def node_explainer(state: dict) -> dict:
 def node_grounding_validator(state: dict) -> dict:
     from backend.app.schemas.models import GroundingCheck
 
-    narrative: str = state.get("narrative", "")
     risk_output: dict = _to_plain_data(state["risk_output"])
     retrieved_chunks: list[dict] = state.get("explainer_chunks", [])
     claims: list[dict[str, Any]] = state.get("claims", [])
@@ -587,54 +611,14 @@ def node_grounding_validator(state: dict) -> dict:
             status="fail",
         ))
 
-    # 2. Fail-closed replacement path
-    failed = [c for c in grounding_trace if c.status == "fail"]
-    if failed:
-        rewritten = _rewrite_from_validated_claims(validated_claims)
-        if rewritten is None:
-            rewritten_narrative, rewritten_claims = _build_safe_summary_from_risk(risk_output)
-        else:
-            rewritten_narrative, rewritten_claims = rewritten
-
-        rewrite_trace, _ = _validate_claims(rewritten_claims, risk_output, valid_chunk_ids)
-        grounding_trace.extend(rewrite_trace)
-
-        # If rewritten claims are still ambiguous/failing, force deterministic safe summary
-        if any(item.status == "fail" for item in rewrite_trace):
-            rewritten_narrative, rewritten_claims = _build_safe_summary_from_risk(risk_output)
-            safe_trace, _ = _validate_claims(rewritten_claims, risk_output, valid_chunk_ids)
-            grounding_trace.extend(safe_trace)
-
-        state["narrative"] = rewritten_narrative
-        state["claims"] = rewritten_claims
-
-        # Optional LLM diagnosis only; never used as authoritative rewrite.
-        if state.get("enable_grounding_diagnosis", False):
-            try:
-                model = _get_gemini_model()
-                fail_summary = "\n".join(
-                    f"- [{c.type}] {c.claim[:100]}" for c in failed
-                )
-                prompt = (
-                    f"The following claims in a credit narrative failed grounding checks "
-                    f"(numeric claims not found in source data, or citations not in retrieved docs):\n"
-                    f"{fail_summary}\n\n"
-                    f"For each failed claim, output one line: "
-                    f"CLAIM: <original> | ISSUE: <why it fails> | FIX: <corrected version or 'remove'>"
-                )
-                response = model.generate_content(prompt)
-                grounding_trace.append(GroundingCheck(
-                    claim="LLM fallback diagnosis",
-                    type="numeric",
-                    source="llm_fallback",
-                    status="fail",
-                ))
-                state["grounding_llm_diagnosis"] = response.text.strip()
-            except Exception as exc:
-                logger.warning("Grounding LLM fallback failed (%s)", exc)
+    rendered = _render_validated_claims(validated_claims, risk_output)
+    if rendered is None:
+        rendered_narrative, rendered_claims = _build_safe_summary_from_risk(risk_output)
+    else:
+        rendered_narrative, rendered_claims = rendered
 
     return {
-        "narrative": state.get("narrative", narrative),
-        "claims": state.get("claims", claims),
+        "narrative": rendered_narrative,
+        "claims": rendered_claims,
         "grounding_trace": grounding_trace,
     }

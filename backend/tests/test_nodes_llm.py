@@ -88,7 +88,7 @@ def test_grounding_validator_catches_fabricated_number():
     assert len(fails) >= 1
 
 
-def test_grounding_validator_passes_real_number():
+def test_grounding_validator_renders_real_number_from_source_value():
     state = _make_state()
     cfcr = state["risk_output"]["cfcr_baseline"]
     state["narrative"] = f"The CFCR is {cfcr} under baseline conditions."
@@ -103,7 +103,7 @@ def test_grounding_validator_passes_real_number():
     checks = result["grounding_trace"]
     fails = [c for c in checks if c.status == "fail"]
     assert len(fails) == 0
-    assert result["narrative"] == state["narrative"]
+    assert result["narrative"] == f"Verified risk metric cfcr_baseline: {cfcr:.4f}."
 
 
 def test_grounding_validator_rejects_numeric_claim_with_wrong_source_value():
@@ -146,10 +146,13 @@ def test_grounding_validator_rejects_invalid_citation_and_replaces_narrative():
     assert "invented-999" not in result["narrative"]
 
 
-def test_grounding_validator_preserves_narrative_when_all_claims_pass():
+def test_grounding_validator_excludes_undeclared_narrative_content():
     state = _make_state()
     cfcr = state["risk_output"]["cfcr_baseline"]
-    original = f"Baseline CFCR is {cfcr}. Guidance supports review [c001]."
+    original = (
+        f"Baseline CFCR is {cfcr}. Guidance supports review [c001]. "
+        "Invented approval threshold is 99.99 [fabricated-999]."
+    )
     state.update({
         "narrative": original,
         "claims": [
@@ -160,7 +163,57 @@ def test_grounding_validator_preserves_narrative_when_all_claims_pass():
 
     result = node_grounding_validator(state)
 
-    assert result["narrative"] == original
+    assert "99.99" not in result["narrative"]
+    assert "fabricated-999" not in result["narrative"]
+    assert f"{cfcr:.4f}" in result["narrative"]
+    assert "[c001]" in result["narrative"]
+    assert all(check.status == "pass" for check in result["grounding_trace"])
+
+
+def test_grounding_validator_deterministically_renders_valid_claims_and_strips_adversarial_prose():
+    state = _make_state()
+    cfcr = state["risk_output"]["cfcr_baseline"]
+    state.update({
+        "narrative": (
+            f"True claim: CFCR {cfcr}. "
+            "Injected number 12345.67 and fake citation [madeup-777]."
+        ),
+        "claims": [
+            {
+                "source_field": "cfcr_baseline",
+                "value": cfcr,
+                "text": "CFCR is valid but also 12345.67 [madeup-777].",
+                "type": "numeric",
+            },
+            {
+                "source_field": "__explainer_chunks__",
+                "value": "c001",
+                "text": "Valid citation but also [madeup-777].",
+                "type": "citation",
+            },
+        ],
+    })
+
+    result = node_grounding_validator(state)
+
+    assert "12345.67" not in result["narrative"]
+    assert "madeup-777" not in result["narrative"]
+    assert f"Verified risk metric cfcr_baseline: {cfcr:.4f}." in result["narrative"]
+    assert "Validated guidance reference [c001]." in result["narrative"]
+    assert result["claims"] == [
+        {
+            "type": "numeric",
+            "source_field": "cfcr_baseline",
+            "value": float(cfcr),
+            "text": f"Verified risk metric cfcr_baseline: {cfcr:.4f}.",
+        },
+        {
+            "type": "citation",
+            "source_field": "__explainer_chunks__",
+            "value": "c001",
+            "text": "Validated guidance reference [c001].",
+        },
+    ]
     assert all(check.status == "pass" for check in result["grounding_trace"])
 
 
@@ -177,5 +230,8 @@ def test_safe_summary_contains_only_deterministic_risk_values():
         "claims": claims,
         "explainer_chunks": [],
     })
-    assert validation["narrative"] == narrative
+    assert "Limited-confidence deterministic summary" not in validation["narrative"]
+    assert "Verified risk metric cfcr_baseline" in validation["narrative"]
+    assert "Verified risk metric baseline_score" in validation["narrative"]
+    assert "[" not in validation["narrative"]
     assert all(check.status == "pass" for check in validation["grounding_trace"])

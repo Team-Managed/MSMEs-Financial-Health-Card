@@ -198,9 +198,18 @@ def _file_checksum(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _chunk_id(source_checksum: str, chunk: PageChunk) -> str:
+def _normalized_source_identity(source_name: str) -> str:
+    normalized = Path(source_name).name.strip().lower()
+    normalized = re.sub(r"\s+", "_", normalized)
+    return normalized
+
+
+def _chunk_id(source_checksum: str, source_identity: str, chunk: PageChunk) -> str:
     text_hash = hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()[:16]
-    raw = f"{source_checksum}:{chunk.page_number}:{chunk.chunk_index}:{text_hash}"
+    raw = (
+        f"{source_identity}:{source_checksum}:{chunk.page_number}:"
+        f"{chunk.chunk_index}:{text_hash}"
+    )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -235,14 +244,14 @@ def build_index(
     chroma_dir: Path = CHROMA_DIR,
     embedding_function=None,
 ) -> None:
-    pdfs = sorted(corpus_dir.glob("*.pdf"))
-    if not pdfs:
-        logger.warning("No PDFs found in %s — index build skipped", corpus_dir)
-        return
-
     ef = embedding_function or SentenceTransformerEmbeddingFunction(model_name=EMBED_MODEL)
     client = chromadb.PersistentClient(path=str(chroma_dir))
     col = _create_v2_collection(client, ef)
+
+    pdfs = sorted(corpus_dir.glob("*.pdf"))
+    if not pdfs:
+        logger.warning("No PDFs found in %s — created empty %s collection", corpus_dir, COLLECTION_NAME)
+        return
 
     total_pages = 0
     blank_pages = 0
@@ -251,6 +260,7 @@ def build_index(
 
     for pdf_path in pdfs:
         checksum = _file_checksum(pdf_path)
+        source_identity = _normalized_source_identity(pdf_path.name)
         pages = _extract_pages_from_pdf(pdf_path)
         total_pages += len(pages)
         blank_pages += sum(1 for page in pages if not (page or "").strip())
@@ -266,7 +276,7 @@ def build_index(
                 continue
 
             col.upsert(
-                ids=[_chunk_id(checksum, chunk)],
+                ids=[_chunk_id(checksum, source_identity, chunk)],
                 documents=[chunk.text],
                 metadatas=[_chunk_metadata(pdf_path.name, checksum, chunk)],
             )
